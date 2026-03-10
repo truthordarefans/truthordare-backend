@@ -27,6 +27,10 @@ const userSchema = new mongoose.Schema({
     passwordHash: { type: String, required: true },
     role:        { type: String, enum: ['fan', 'creator'], required: true },
     handle:      { type: String, default: null },
+    bio:         { type: String, default: '' },
+    photo:       { type: String, default: null },
+    isLive:      { type: Boolean, default: false },
+    featuredRequested: { type: Boolean, default: false },
     stripeAccountId: { type: String, default: null },
     createdAt:   { type: Date, default: Date.now },
 });
@@ -307,6 +311,137 @@ app.get('/room-chat/:roomId', async (req, res) => {
         res.status(500).json({ error: 'Could not fetch.' });
     }
 });
+
+// ── CREATOR DASHBOARD ENDPOINTS ──────────────────────────────────────────────
+
+// GET /creator/profile — returns the logged-in creator's profile
+app.get('/creator/profile', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select('-passwordHash');
+        if (!user) return res.status(404).json({ error: 'User not found.' });
+        if (user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        res.json({ user });
+    } catch (err) {
+        console.error('Failed to fetch creator profile:', err);
+        res.status(500).json({ error: 'Could not fetch profile.' });
+    }
+});
+
+// PUT /creator/profile — update name, bio, photo, handle
+app.put('/creator/profile', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) return res.status(404).json({ error: 'User not found.' });
+        if (user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const { name, bio, photo, handle } = req.body;
+        if (name) user.name = name;
+        if (bio !== undefined) user.bio = bio;
+        if (photo !== undefined) user.photo = photo;
+        if (handle) user.handle = handle.startsWith('@') ? handle : '@' + handle;
+        await user.save();
+        res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle } });
+    } catch (err) {
+        console.error('Failed to update creator profile:', err);
+        res.status(500).json({ error: 'Could not update profile.' });
+    }
+});
+
+// PUT /creator/availability — toggle live/offline status
+app.put('/creator/availability', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.isLive = req.body.isLive === true;
+        await user.save();
+        console.log(`Creator ${user.name} is now ${user.isLive ? 'LIVE 🔴' : 'OFFLINE ⚫'}`);
+        res.json({ success: true, isLive: user.isLive });
+    } catch (err) {
+        console.error('Failed to update availability:', err);
+        res.status(500).json({ error: 'Could not update availability.' });
+    }
+});
+
+// POST /creator/feature-request — request to be featured on homepage
+app.post('/creator/feature-request', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const { bio, photo } = req.body;
+        // Update user's featured request fields
+        user.featuredRequested = true;
+        if (bio !== undefined) user.bio = bio;
+        if (photo !== undefined) user.photo = photo;
+        await user.save();
+        // Create or update Featured entry (pending approval)
+        const existing = await Featured.findOne({ email: user.email });
+        if (existing) {
+            existing.name = user.name;
+            existing.bio = user.bio || '';
+            existing.photo = user.photo || null;
+            existing.approved = false; // Reset to pending on re-apply
+            await existing.save();
+        } else {
+            await Featured.create({ name: user.name, email: user.email, bio: user.bio || '', photo: user.photo || null });
+        }
+        console.log(`⭐ Creator ${user.name} requested to be featured — pending admin approval.`);
+        res.json({ success: true, message: 'Feature request submitted. Pending admin approval.' });
+    } catch (err) {
+        console.error('Failed to submit feature request:', err);
+        res.status(500).json({ error: 'Could not submit request.' });
+    }
+});
+
+// DELETE /creator/feature-request — remove from featured
+app.delete('/creator/feature-request', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.featuredRequested = false;
+        await user.save();
+        await Featured.findOneAndDelete({ email: user.email });
+        res.json({ success: true, message: 'Removed from featured.' });
+    } catch (err) {
+        console.error('Failed to remove feature request:', err);
+        res.status(500).json({ error: 'Could not remove.' });
+    }
+});
+
+// GET /creator/sessions — returns sessions for the logged-in creator
+app.get('/creator/sessions', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const sessions = await Booking.find({ creatorEmail: user.email }).sort({ createdAt: -1 }).limit(50);
+        res.json({ sessions });
+    } catch (err) {
+        console.error('Failed to fetch creator sessions:', err);
+        res.status(500).json({ error: 'Could not fetch sessions.' });
+    }
+});
+
+// GET /creator/earnings — returns earnings summary for the logged-in creator
+app.get('/creator/earnings', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const sessions = await Booking.find({ creatorEmail: user.email, status: { $in: ['confirmed', 'accepted'] } });
+        const PRICES = { truth: 1500, dare: 4500 };
+        const totalGross = sessions.reduce((sum, s) => sum + (PRICES[s.sessionType] || 0), 0);
+        const totalEarnings = Math.round(totalGross * 0.85); // 85% to creator
+        res.json({
+            totalSessions: sessions.length,
+            totalGrossUSD: (totalGross / 100).toFixed(2),
+            totalEarningsUSD: (totalEarnings / 100).toFixed(2),
+            stripeConnected: !!user.stripeAccountId,
+            stripeAccountId: user.stripeAccountId || null,
+        });
+    } catch (err) {
+        console.error('Failed to fetch creator earnings:', err);
+        res.status(500).json({ error: 'Could not fetch earnings.' });
+    }
+});
+
+// ── END CREATOR DASHBOARD ENDPOINTS ───────────────────────────────────────────
 
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
