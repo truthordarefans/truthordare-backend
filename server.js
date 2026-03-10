@@ -153,7 +153,7 @@ app.post('/create-checkout-session', async (req, res) => {
             payment_method_types: ['card'],
             line_items: [{
                 price_data: {
-                    currency: 'usd',
+                    currency: 'cad',
                     product_data: {
                         name: price.label,
                         description: `Fan: ${fanName} · Creator: ${creatorName}`,
