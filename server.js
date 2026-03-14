@@ -193,23 +193,65 @@ app.post('/create-checkout-session', async (req, res) => {
 
 app.post('/onboard-creator', async (req, res) => {
     const { creatorEmail, creatorName } = req.body;
+    if (!creatorEmail || !creatorName) return res.status(400).json({ error: 'Email and name required.' });
     try {
-        const account = await stripe.accounts.create({
-            type: 'express',
-            email: creatorEmail,
-            capabilities: { transfers: { requested: true } },
-            business_profile: { name: creatorName, url: FRONTEND },
-        });
+        const user = await User.findOne({ email: creatorEmail.toLowerCase() });
+        let accountId = user?.stripeAccountId || null;
+
+        // If creator already has an account, generate a new onboarding link for it
+        // (handles the case where they started but didn't finish)
+        if (!accountId) {
+            const account = await stripe.accounts.create({
+                type: 'express',
+                email: creatorEmail,
+                capabilities: { transfers: { requested: true } },
+                business_profile: { name: creatorName, url: FRONTEND },
+            });
+            accountId = account.id;
+            await User.findOneAndUpdate({ email: creatorEmail.toLowerCase() }, { stripeAccountId: accountId });
+        }
+
+        // Check if already fully onboarded
+        const account = await stripe.accounts.retrieve(accountId);
+        if (account.details_submitted && account.charges_enabled) {
+            // Already fully connected — return a dashboard link instead
+            const loginLink = await stripe.accounts.createLoginLink(accountId);
+            return res.json({ accountId, onboardingUrl: loginLink.url, alreadyConnected: true });
+        }
+
+        // Generate fresh onboarding link
         const accountLink = await stripe.accountLinks.create({
-            account: account.id,
-            refresh_url: `${FRONTEND}/onboard-refresh?account=${account.id}`,
-            return_url: `${FRONTEND}/onboard-complete.html?account=${account.id}`,
+            account: accountId,
+            refresh_url: `${FRONTEND}/onboard-refresh.html?account=${accountId}`,
+            return_url: `${FRONTEND}/onboard-complete.html?account=${accountId}`,
             type: 'account_onboarding',
         });
-        await User.findOneAndUpdate({ email: creatorEmail.toLowerCase() }, { stripeAccountId: account.id });
-        res.json({ accountId: account.id, onboardingUrl: accountLink.url });
+        res.json({ accountId, onboardingUrl: accountLink.url, alreadyConnected: false });
     } catch (err) {
         console.error('Stripe creator onboarding failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /stripe-account-status — check if a creator's Stripe account is fully onboarded
+app.get('/stripe-account-status', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        if (!user.stripeAccountId) {
+            return res.json({ connected: false, detailsSubmitted: false, chargesEnabled: false, payoutsEnabled: false });
+        }
+        const account = await stripe.accounts.retrieve(user.stripeAccountId);
+        const fullyConnected = account.details_submitted && account.charges_enabled;
+        res.json({
+            connected: fullyConnected,
+            detailsSubmitted: account.details_submitted,
+            chargesEnabled: account.charges_enabled,
+            payoutsEnabled: account.payouts_enabled,
+            accountId: user.stripeAccountId,
+        });
+    } catch (err) {
+        console.error('Failed to fetch Stripe account status:', err);
         res.status(500).json({ error: err.message });
     }
 });
