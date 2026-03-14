@@ -22,7 +22,8 @@ mongoose.connect(process.env.MONGODB_URI)
 
 // Schemas
 const userSchema = new mongoose.Schema({
-    name:        { type: String, required: true },
+    name:        { type: String, required: true },       // Display / stage name (public)
+    legalName:   { type: String, default: null },        // Legal name (private, for Stripe)
     email:       { type: String, required: true, unique: true, lowercase: true },
     passwordHash: { type: String, required: true },
     role:        { type: String, enum: ['fan', 'creator'], required: true },
@@ -114,15 +115,16 @@ const createDailyRoom = async (sessionType) => {
 
 // Routes
 app.post('/register', async (req, res) => {
-    const { name, email, password, role } = req.body;
+    const { name, legalName, email, password, role, handle } = req.body;
     if (!name || !email || !password || !role) return res.status(400).json({ error: 'All fields required.' });
     try {
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) return res.status(409).json({ error: 'User already exists.' });
         const passwordHash = await bcrypt.hash(password, 10);
-        const user = await User.create({ name, email: email.toLowerCase(), passwordHash, role });
-        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({ message: 'User registered.', token });
+        const handleFormatted = handle ? (handle.startsWith('@') ? handle : '@' + handle) : null;
+        const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted });
+        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Registration failed.' }); }
 });
 
@@ -442,6 +444,92 @@ app.get('/creator/earnings', requireAuth, async (req, res) => {
 });
 
 // ── END CREATOR DASHBOARD ENDPOINTS ───────────────────────────────────────────
+
+// ── BOOKING ENDPOINTS ─────────────────────────────────────────────────────────
+
+// POST /booking — fan submits a booking request after payment
+app.post('/booking', async (req, res) => {
+    const { fanName, fanEmail, creatorHandle, sessionType, requestedDate, requestedTime, note, paymentIntentId } = req.body;
+    if (!fanName || !fanEmail || !creatorHandle || !sessionType || !requestedDate || !requestedTime) {
+        return res.status(400).json({ error: 'Missing required booking fields.' });
+    }
+    try {
+        const creator = await User.findOne({ handle: creatorHandle.startsWith('@') ? creatorHandle : '@' + creatorHandle });
+        if (!creator) return res.status(404).json({ error: 'Creator not found.' });
+        const roomId = `${creator.handle.replace('@','')}-${Date.now()}`;
+        const booking = await Booking.create({
+            fanName, fanEmail,
+            creatorName: creator.name,
+            creatorEmail: creator.email,
+            sessionType,
+            requestedDate: `${requestedDate} ${requestedTime}`,
+            paymentIntentId: paymentIntentId || null,
+            roomId,
+            status: 'pending',
+        });
+        res.status(201).json({ success: true, bookingId: booking._id, roomId });
+    } catch (err) {
+        console.error('Booking creation failed:', err);
+        res.status(500).json({ error: 'Could not create booking.' });
+    }
+});
+
+// GET /creator/bookings — creator sees all pending/upcoming bookings
+app.get('/creator/bookings', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const bookings = await Booking.find({ creatorEmail: user.email, status: { $in: ['pending', 'accepted', 'confirmed', 'proposed'] } }).sort({ createdAt: -1 });
+        res.json({ bookings });
+    } catch (err) {
+        console.error('Failed to fetch bookings:', err);
+        res.status(500).json({ error: 'Could not fetch bookings.' });
+    }
+});
+
+// PUT /booking/:id/respond — creator accepts, declines, or proposes new time
+app.put('/booking/:id/respond', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.creatorEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
+        const { action, proposedDate, proposedTime } = req.body;
+        if (action === 'accept') {
+            booking.status = 'confirmed';
+            if (!booking.roomId) booking.roomId = `${user.handle.replace('@','')}-${Date.now()}`;
+        } else if (action === 'decline') {
+            booking.status = 'declined';
+        } else if (action === 'propose') {
+            booking.status = 'proposed';
+            booking.proposedDate = proposedDate;
+            booking.proposedTime = proposedTime;
+        } else {
+            return res.status(400).json({ error: 'Invalid action.' });
+        }
+        await booking.save();
+        res.json({ success: true, booking });
+    } catch (err) {
+        console.error('Booking response failed:', err);
+        res.status(500).json({ error: 'Could not update booking.' });
+    }
+});
+
+// GET /creator/:handle — public creator profile
+app.get('/creator/:handle', async (req, res) => {
+    try {
+        const handle = req.params.handle.startsWith('@') ? req.params.handle : '@' + req.params.handle;
+        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo isLive handle stripeAccountId');
+        if (!creator) return res.status(404).json({ error: 'Creator not found.' });
+        res.json({ creator });
+    } catch (err) {
+        console.error('Failed to fetch creator profile:', err);
+        res.status(500).json({ error: 'Could not fetch.' });
+    }
+});
+
+// ── END BOOKING ENDPOINTS ──────────────────────────────────────────────────────
 
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
