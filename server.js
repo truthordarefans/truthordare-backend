@@ -33,6 +33,14 @@ const userSchema = new mongoose.Schema({
     isLive:      { type: Boolean, default: false },
     featuredRequested: { type: Boolean, default: false },
     stripeAccountId: { type: String, default: null },
+    socials: {
+        instagram:  { type: String, default: null },
+        onlyfans:   { type: String, default: null },
+        fansly:     { type: String, default: null },
+        fansvue:    { type: String, default: null },
+        luvelyfans: { type: String, default: null },
+        tiktok:     { type: String, default: null },
+    },
     createdAt:   { type: Date, default: Date.now },
 });
 const User = mongoose.model('User', userSchema);
@@ -115,14 +123,14 @@ const createDailyRoom = async (sessionType) => {
 
 // Routes
 app.post('/register', async (req, res) => {
-    const { name, legalName, email, password, role, handle } = req.body;
+    const { name, legalName, email, password, role, handle, socials } = req.body;
     if (!name || !email || !password || !role) return res.status(400).json({ error: 'All fields required.' });
     try {
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) return res.status(409).json({ error: 'User already exists.' });
         const passwordHash = await bcrypt.hash(password, 10);
         const handleFormatted = handle ? (handle.startsWith('@') ? handle : '@' + handle) : null;
-        const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted });
+        const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted, socials: socials || {} });
         const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Registration failed.' }); }
@@ -155,7 +163,7 @@ app.post('/create-checkout-session', async (req, res) => {
             payment_method_types: ['card'],
             line_items: [{
                 price_data: {
-                    currency: 'cad',
+                    currency: 'usd',
                     product_data: {
                         name: price.label,
                         description: `Fan: ${fanName} · Creator: ${creatorName}`,
@@ -520,7 +528,7 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
 app.get('/creator/:handle', async (req, res) => {
     try {
         const handle = req.params.handle.startsWith('@') ? req.params.handle : '@' + req.params.handle;
-        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo isLive handle stripeAccountId');
+        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo isLive handle stripeAccountId socials');
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         res.json({ creator });
     } catch (err) {
@@ -530,6 +538,24 @@ app.get('/creator/:handle', async (req, res) => {
 });
 
 // ── END BOOKING ENDPOINTS ──────────────────────────────────────────────────────
+
+// POST /notify-creator — fan sends a notification to a creator
+app.post('/notify-creator', async (req, res) => {
+    const { creatorHandle, fanName, fanEmail } = req.body;
+    if (!creatorHandle || !fanName || !fanEmail) return res.status(400).json({ error: 'Missing fields.' });
+    try {
+        const handle = creatorHandle.startsWith('@') ? creatorHandle : '@' + creatorHandle;
+        const creator = await User.findOne({ handle, role: 'creator' });
+        if (!creator) return res.status(404).json({ error: 'Creator not found.' });
+        // Log the notification (email sending can be wired in later)
+        console.log(`🔔 Fan notification: ${fanName} (${fanEmail}) is interested in booking ${creator.name}`);
+        // TODO: send email to creator.email using nodemailer/sendgrid when configured
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Notify creator failed:', err);
+        res.status(500).json({ error: 'Could not send notification.' });
+    }
+});
 
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
