@@ -150,7 +150,7 @@ app.post('/login', async (req, res) => {
 });
 
 app.post('/create-checkout-session', async (req, res) => {
-    const { selectedCard, creatorName, fanName, creatorStripeAccountId } = req.body;
+    const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note } = req.body;
     if (!selectedCard || !creatorName || !fanName) return res.status(400).json({ error: 'Missing fields.' });
     const PRICES = {
         truth: { amount: 1500, label: 'Truth Session' },
@@ -175,7 +175,7 @@ app.post('/create-checkout-session', async (req, res) => {
             mode: 'payment',
             success_url: `${FRONTEND}?success=1`,
             cancel_url: `${FRONTEND}?canceled=1`,
-            metadata: { creator: creatorName, fan: fanName, type: selectedCard },
+            metadata: { creator: creatorName, fan: fanName, type: selectedCard, bookingDate: bookingDate || '', bookingTime: bookingTime || '', note: note || '' },
         };
         if (creatorStripeAccountId) {
             sessionParams.payment_intent_data = {
