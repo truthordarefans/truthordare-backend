@@ -129,7 +129,12 @@ app.post('/register', async (req, res) => {
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) return res.status(409).json({ error: 'User already exists.' });
         const passwordHash = await bcrypt.hash(password, 10);
-        const handleFormatted = handle ? (handle.startsWith('@') ? handle : '@' + handle) : null;
+        // Format handle as name@truthordare (strip any leading @ or existing @truthordare suffix)
+        let handleFormatted = null;
+        if (handle) {
+            let h = handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
+            handleFormatted = h ? `${h}@truthordare` : null;
+        }
         const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted, socials: socials || {} });
         const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
@@ -389,7 +394,10 @@ app.put('/creator/profile', requireAuth, async (req, res) => {
         if (name) user.name = name;
         if (bio !== undefined) user.bio = bio;
         if (photo !== undefined) user.photo = photo;
-        if (handle) user.handle = handle.startsWith('@') ? handle : '@' + handle;
+        if (handle) {
+            let h = handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
+            user.handle = h ? `${h}@truthordare` : user.handle;
+        }
         await user.save();
         res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle } });
     } catch (err) {
@@ -504,7 +512,9 @@ app.post('/booking', async (req, res) => {
         return res.status(400).json({ error: 'Missing required booking fields.' });
     }
     try {
-        const creator = await User.findOne({ handle: creatorHandle.startsWith('@') ? creatorHandle : '@' + creatorHandle });
+        // Handle format is name@truthordare — normalise by stripping leading @ if present
+        const normalizedHandle = creatorHandle.replace(/^@/, '');
+        const creator = await User.findOne({ handle: normalizedHandle });
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         const roomId = `${creator.handle.replace('@','')}-${Date.now()}`;
         const booking = await Booking.create({
@@ -582,7 +592,8 @@ app.get('/all-creators', async (req, res) => {
 
 app.get('/creator/:handle', async (req, res) => {
     try {
-        const handle = req.params.handle.startsWith('@') ? req.params.handle : '@' + req.params.handle;
+        // Handle format is name@truthordare — normalise by stripping leading @ if present
+        const handle = req.params.handle.replace(/^@/, '');
         const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo isLive handle stripeAccountId socials');
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         res.json({ creator });
@@ -599,7 +610,7 @@ app.post('/notify-creator', async (req, res) => {
     const { creatorHandle, fanName, fanEmail } = req.body;
     if (!creatorHandle || !fanName || !fanEmail) return res.status(400).json({ error: 'Missing fields.' });
     try {
-        const handle = creatorHandle.startsWith('@') ? creatorHandle : '@' + creatorHandle;
+        const handle = creatorHandle.replace(/^@/, '');
         const creator = await User.findOne({ handle, role: 'creator' });
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         // Log the notification (email sending can be wired in later)
@@ -639,6 +650,26 @@ app.delete('/account', requireAuth, async (req, res) => {
         console.error('Delete account error:', err);
         res.status(500).json({ error: 'Could not delete account.' });
     }
+});
+
+// Admin: fix all handles to name@truthordare format
+app.post('/admin/fix-handles', async (req, res) => {
+    const { secret } = req.body;
+    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const creators = await User.find({ role: 'creator', handle: { $ne: null } });
+        let fixed = [];
+        for (const c of creators) {
+            let h = c.handle.replace(/^@+/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
+            const newHandle = h ? `${h}@truthordare` : null;
+            if (newHandle !== c.handle) {
+                fixed.push({ old: c.handle, new: newHandle, name: c.name });
+                c.handle = newHandle;
+                await c.save();
+            }
+        }
+        res.json({ success: true, fixed });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
