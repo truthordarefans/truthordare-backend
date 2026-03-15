@@ -599,6 +599,35 @@ app.post('/notify-creator', async (req, res) => {
     }
 });
 
+// ── DELETE ACCOUNT ──────────────────────────────────────────────────────────
+// Requires auth. Creator or fan can delete their own account.
+// Creators: also removes their Featured entry and marks Stripe account as deleted.
+app.delete('/account', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId);
+        if (!user) return res.status(404).json({ error: 'Account not found.' });
+
+        // If creator, remove from Featured collection too
+        if (user.role === 'creator') {
+            await Featured.deleteMany({ email: user.email });
+            // Optionally deauthorize Stripe Express account
+            if (user.stripeAccountId) {
+                try {
+                    await stripe.accounts.del(user.stripeAccountId);
+                } catch (stripeErr) {
+                    console.warn('Stripe account deletion skipped:', stripeErr.message);
+                }
+            }
+        }
+
+        await User.findByIdAndDelete(req.userId);
+        res.json({ success: true, message: 'Account deleted successfully.' });
+    } catch (err) {
+        console.error('Delete account error:', err);
+        res.status(500).json({ error: 'Could not delete account.' });
+    }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
