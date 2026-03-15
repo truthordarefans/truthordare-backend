@@ -566,7 +566,20 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
     }
 });
 
-// GET /creator/:handle — public creator profile
+// Return all creators who have a handle set (for the homepage browse grid)
+app.get('/all-creators', async (req, res) => {
+    try {
+        const creators = await User.find(
+            { role: 'creator', handle: { $ne: null, $ne: '' } },
+            { name: 1, handle: 1, bio: 1, photo: 1, isLive: 1, _id: 0 }
+        ).sort({ isLive: -1, createdAt: -1 });
+        res.json({ creators });
+    } catch (err) {
+        console.error('All creators error:', err);
+        res.status(500).json({ error: 'Could not fetch creators.' });
+    }
+});
+
 app.get('/creator/:handle', async (req, res) => {
     try {
         const handle = req.params.handle.startsWith('@') ? req.params.handle : '@' + req.params.handle;
