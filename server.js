@@ -6,6 +6,23 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+
+// Email transporter (uses Gmail via app password or SMTP env vars)
+const emailTransporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER || 'truthordarefans@gmail.com',
+        pass: process.env.EMAIL_PASS,  // App password set in Render env vars
+    },
+});
+async function sendEmail(to, subject, html) {
+    if (!process.env.EMAIL_PASS) { console.warn('EMAIL_PASS not set — skipping email'); return; }
+    try {
+        await emailTransporter.sendMail({ from: '"Truth or Dare For My Fans" <truthordarefans@gmail.com>', to, subject, html });
+        console.log(`📧 Email sent to ${to}: ${subject}`);
+    } catch (err) { console.error('Email send error:', err.message); }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,6 +59,8 @@ const userSchema = new mongoose.Schema({
         tiktok:     { type: String, default: null },
     },
     createdAt:   { type: Date, default: Date.now },
+    resetToken:  { type: String, default: null },
+    resetTokenExpiry: { type: Date, default: null },
 });
 const User = mongoose.model('User', userSchema);
 
@@ -650,6 +669,47 @@ app.delete('/account', requireAuth, async (req, res) => {
         console.error('Delete account error:', err);
         res.status(500).json({ error: 'Could not delete account.' });
     }
+});
+
+// POST /forgot-password — send reset link to email
+app.post('/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required.' });
+    try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        // Always return success to avoid email enumeration
+        if (!user) return res.json({ message: 'If that email exists, a reset link has been sent.' });
+        const token = crypto.randomBytes(32).toString('hex');
+        user.resetToken = token;
+        user.resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await user.save();
+        const resetUrl = `${FRONTEND}/reset-password?token=${token}`;
+        await sendEmail(user.email, 'Reset your Truth or Dare password', `
+            <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#1a0000;color:#FDF6EC;border-radius:10px;">
+                <h2 style="color:#D4A574;font-size:24px;margin-bottom:8px;">Reset Your Password</h2>
+                <p style="color:#C9B99A;margin-bottom:24px;">Click the button below to reset your password. This link expires in 1 hour.</p>
+                <a href="${resetUrl}" style="display:inline-block;padding:14px 28px;background:#CC0000;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">Reset Password</a>
+                <p style="color:#9A8A72;font-size:12px;margin-top:24px;">If you didn't request this, you can safely ignore this email.</p>
+            </div>
+        `);
+        res.json({ message: 'If that email exists, a reset link has been sent.' });
+    } catch (err) { res.status(500).json({ error: 'Could not process request.' }); }
+});
+
+// POST /reset-password — set new password using token
+app.post('/reset-password', async (req, res) => {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ error: 'Token and password required.' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    try {
+        const user = await User.findOne({ resetToken: token, resetTokenExpiry: { $gt: new Date() } });
+        if (!user) return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+        user.passwordHash = await bcrypt.hash(password, 10);
+        user.resetToken = null;
+        user.resetTokenExpiry = null;
+        await user.save();
+        res.json({ message: 'Password reset successfully. You can now log in.' });
+    } catch (err) { res.status(500).json({ error: 'Could not reset password.' }); }
 });
 
 // Admin: fix all handles to name@truthordare format
