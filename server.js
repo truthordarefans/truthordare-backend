@@ -647,7 +647,7 @@ app.post('/notify-creator', async (req, res) => {
 // Creators: also removes their Featured entry and marks Stripe account as deleted.
 app.delete('/account', requireAuth, async (req, res) => {
     try {
-        const user = await User.findById(req.userId);
+        const user = await User.findById(req.user.userId);
         if (!user) return res.status(404).json({ error: 'Account not found.' });
 
         // If creator, remove from Featured collection too
@@ -663,7 +663,7 @@ app.delete('/account', requireAuth, async (req, res) => {
             }
         }
 
-        await User.findByIdAndDelete(req.userId);
+        await User.findByIdAndDelete(req.user.userId);
         res.json({ success: true, message: 'Account deleted successfully.' });
     } catch (err) {
         console.error('Delete account error:', err);
