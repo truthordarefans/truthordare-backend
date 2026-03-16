@@ -58,6 +58,7 @@ const userSchema = new mongoose.Schema({
         luvelyfans: { type: String, default: null },
         tiktok:     { type: String, default: null },
     },
+    extraPhotos: { type: [String], default: [] },
     createdAt:   { type: Date, default: Date.now },
     resetToken:  { type: String, default: null },
     resetTokenExpiry: { type: Date, default: null },
@@ -409,16 +410,17 @@ app.put('/creator/profile', requireAuth, async (req, res) => {
         const user = await User.findById(req.user.userId);
         if (!user) return res.status(404).json({ error: 'User not found.' });
         if (user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
-        const { name, bio, photo, handle } = req.body;
+        const { name, bio, photo, handle, extraPhotos } = req.body;
         if (name) user.name = name;
         if (bio !== undefined) user.bio = bio;
         if (photo !== undefined) user.photo = photo;
+        if (extraPhotos !== undefined) user.extraPhotos = extraPhotos.slice(0, 4); // max 4 extra photos
         if (handle) {
             let h = handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
             user.handle = h ? `${h}@truthordare` : user.handle;
         }
         await user.save();
-        res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle } });
+        res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle, extraPhotos: user.extraPhotos || [] } });
     } catch (err) {
         console.error('Failed to update creator profile:', err);
         res.status(500).json({ error: 'Could not update profile.' });
@@ -450,6 +452,7 @@ app.post('/creator/feature-request', requireAuth, async (req, res) => {
         user.featuredRequested = true;
         if (bio !== undefined) user.bio = bio;
         if (photo !== undefined) user.photo = photo;
+        if (extraPhotos !== undefined) user.extraPhotos = extraPhotos.slice(0, 4); // max 4 extra photos
         await user.save();
         // Create or update Featured entry (pending approval)
         const existing = await Featured.findOne({ email: user.email });
@@ -613,7 +616,7 @@ app.get('/creator/:handle', async (req, res) => {
     try {
         // Handle format is name@truthordare — normalise by stripping leading @ if present
         const handle = req.params.handle.replace(/^@/, '');
-        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo isLive handle stripeAccountId socials');
+        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo extraPhotos isLive handle stripeAccountId socials');
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         res.json({ creator });
     } catch (err) {
