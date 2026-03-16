@@ -732,6 +732,32 @@ app.post('/admin/fix-handles', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Admin: update any creator profile by handle
+app.post('/admin/update-creator', async (req, res) => {
+    const { secret, handle, updates } = req.body;
+    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const creator = await User.findOneAndUpdate(
+            { handle },
+            { $set: updates },
+            { new: true }
+        );
+        if (!creator) return res.status(404).json({ error: 'Creator not found' });
+        res.json({ success: true, creator: { name: creator.name, handle: creator.handle, bio: creator.bio } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: delete a creator by name
+app.post('/admin/delete-creator', async (req, res) => {
+    const { secret, name } = req.body;
+    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const result = await User.findOneAndDelete({ name, role: 'creator' });
+        if (!result) return res.status(404).json({ error: 'Creator not found' });
+        res.json({ success: true, deleted: result.name });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
