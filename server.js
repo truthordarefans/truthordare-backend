@@ -148,6 +148,19 @@ const createDailyRoom = async (sessionType) => {
 };
 
 // Routes
+// Handle availability check
+app.get('/check-handle/:handle', async (req, res) => {
+    try {
+        const raw = req.params.handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+        if (!raw || raw.length < 3) return res.json({ available: false, reason: 'Handle must be at least 3 characters.' });
+        if (raw.length > 20) return res.json({ available: false, reason: 'Handle must be 20 characters or less.' });
+        const fullHandle = `${raw}@truthordare`;
+        const existing = await User.findOne({ handle: fullHandle });
+        if (existing) return res.json({ available: false, reason: 'That handle is already taken.' });
+        return res.json({ available: true, handle: fullHandle });
+    } catch (err) { res.status(500).json({ available: false, reason: 'Server error.' }); }
+});
+
 app.post('/register', async (req, res) => {
     const { name, legalName, email, password, role, handle, socials, notificationPrefs } = req.body;
     if (!name || !email || !password || !role) return res.status(400).json({ error: 'All fields required.' });
