@@ -101,7 +101,9 @@ const bookingSchema = new mongoose.Schema({
     requestedDate: { type: String, required: true },
     proposedDate: { type: String, default: null },
     proposedTime: { type: String, default: null },
-    status:      { type: String, enum: ['pending', 'accepted', 'declined', 'proposed', 'confirmed', 'expired'], default: 'pending' },
+    status:      { type: String, enum: ['pending', 'accepted', 'declined', 'proposed', 'confirmed', 'expired', 'refused'], default: 'pending' },
+    requestedTime: { type: String, default: null },
+    note:        { type: String, default: null },
     paymentIntentId: { type: String, default: null },
     roomId:      { type: String, default: null },
     roomUrl:     { type: String, default: null },
@@ -718,6 +720,53 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
     } catch (err) {
         console.error('Booking response failed:', err);
         res.status(500).json({ error: 'Could not update booking.' });
+    }
+});
+
+// POST /booking/:id/refuse-challenge — creator refuses challenge during live session, triggers full refund
+app.post('/booking/:id/refuse-challenge', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.creatorEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
+
+        // Issue a full Stripe refund if we have a paymentIntentId
+        let refundIssued = false;
+        if (booking.paymentIntentId) {
+            try {
+                await stripe.refunds.create({ payment_intent: booking.paymentIntentId });
+                refundIssued = true;
+                console.log(`💸 Refund issued for booking ${booking._id} — paymentIntent ${booking.paymentIntentId}`);
+            } catch (e) {
+                console.error('Stripe refund failed:', e.message);
+            }
+        }
+
+        booking.status = 'refused';
+        await booking.save();
+
+        // Email the fan about the refund
+        if (booking.fanEmail) {
+            const fanHtml = `
+                <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                    <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">Session Update</h2>
+                    <p style="font-size:15px;margin-bottom:16px;">The creator was unable to complete this challenge. <strong style="color:#FDF6EC;">You have been fully refunded.</strong></p>
+                    <p style="font-size:13px;color:#9A8A72;">Your refund will appear on your card within 5–10 business days depending on your bank.</p>
+                    <p style="font-size:12px;color:#9A8A72;margin-top:20px;">We apologise for the inconvenience. Visit <a href="https://www.truthordareformyfans.com" style="color:#D4A574;">truthordareformyfans.com</a> to book with another creator.</p>
+                </div>`;
+            try { await sendEmail(booking.fanEmail, '💸 Your session has been refunded', fanHtml); } catch(e) {}
+        }
+
+        // Clear inSession status for creator
+        user.inSession = false;
+        await user.save();
+
+        res.json({ success: true, refundIssued });
+    } catch (err) {
+        console.error('Refuse challenge failed:', err);
+        res.status(500).json({ error: 'Could not process refusal.' });
     }
 });
 
