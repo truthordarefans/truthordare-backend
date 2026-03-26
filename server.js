@@ -1118,7 +1118,7 @@ app.post('/reset-password', async (req, res) => {
 });
 
 // ── ADMIN ENDPOINTS ──────────────────────────────────────────────────────────
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'tod_admin_fix_2026';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'Gentssolo55%';
 
 // GET /admin/stats — platform overview
 app.get('/admin/stats', async (req, res) => {
@@ -1192,7 +1192,7 @@ app.put('/admin/creator/:id/feature', async (req, res) => {
 // Admin: fix all handles to name@truthordare format
 app.post('/admin/fix-handles', async (req, res) => {
     const { secret } = req.body;
-    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
     try {
         const creators = await User.find({ role: 'creator', handle: { $ne: null } });
         let fixed = [];
@@ -1212,7 +1212,7 @@ app.post('/admin/fix-handles', async (req, res) => {
 // Admin: update any creator profile by handle
 app.post('/admin/update-creator', async (req, res) => {
     const { secret, handle, updates } = req.body;
-    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
     try {
         const creator = await User.findOneAndUpdate(
             { handle },
@@ -1227,7 +1227,7 @@ app.post('/admin/update-creator', async (req, res) => {
 // Admin: delete a creator by name
 app.post('/admin/delete-creator', async (req, res) => {
     const { secret, name } = req.body;
-    if (secret !== 'tod_admin_fix_2026') return res.status(403).json({ error: 'Forbidden' });
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
     try {
         const result = await User.findOneAndDelete({ name, role: 'creator' });
         if (!result) return res.status(404).json({ error: 'Creator not found' });
