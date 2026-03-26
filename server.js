@@ -323,20 +323,22 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
     // Handle the event
     if (event.type === 'checkout.session.completed') {
         const session = event.data.object;
-        const { creator: creatorName, fan: fanName, type: sessionType, bookingDate, bookingTime } = session.metadata || {};
+        const { creator: creatorName, fan: fanName, type: sessionType, bookingDate, bookingTime, bookingId } = session.metadata || {};
         const fanEmail = session.customer_details?.email || session.metadata?.fanEmail || '';
-        console.log(`✅ Payment confirmed: ${fanName} booked ${sessionType} with ${creatorName} — $${(session.amount_total/100).toFixed(2)}`);
+        const paymentIntentId = session.payment_intent;
+        console.log(`✅ Payment confirmed: ${fanName} booked ${sessionType} with ${creatorName} — $${(session.amount_total/100).toFixed(2)} (bookingId: ${bookingId || 'legacy'})`);
 
         // Run async post-payment fulfillment (don't await — respond to Stripe immediately)
         (async () => {
             try {
-                // 1. Find the creator in the DB to get their email
+                const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+                const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+                const sessionMinutes = sessionType === 'truth' ? 5 : 15;
+
+                // 1. Find the creator in the DB
                 const creator = await User.findOne({ name: creatorName, role: 'creator' });
                 const creatorEmail = creator ? creator.email : null;
                 const creatorHandle = creator ? creator.handle : '';
-                const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
-                const sessionMinutes = sessionType === 'truth' ? 5 : 15;
-                const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
 
                 // 2. Create a Daily.co video room
                 let roomUrl = null;
@@ -351,41 +353,57 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                         console.error('Daily.co room creation failed:', e.message);
                     }
                 }
-
                 const roomLink = roomUrl
                     ? `${frontendUrl}/room?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}`
                     : null;
 
-                // 3. Email the creator
+                // 3. Update the Booking record if bookingId is present
+                if (bookingId) {
+                    try {
+                        const booking = await Booking.findById(bookingId);
+                        if (booking) {
+                            booking.status = 'paid';
+                            booking.paymentIntentId = paymentIntentId;
+                            if (roomId) booking.roomId = roomId;
+                            if (roomUrl) booking.roomUrl = roomUrl;
+                            await booking.save();
+                            console.log(`📋 Booking ${bookingId} marked as paid.`);
+                        }
+                    } catch (e) {
+                        console.error('Failed to update booking record:', e.message);
+                    }
+                }
+
+                // 4. Email the creator
                 if (creatorEmail) {
                     const creatorHtml = `
                         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 New Booking — ${sessionLabel}</h2>
-                            <p style="font-size:15px;margin-bottom:16px;">A fan just paid and is ready for their session with you!</p>
+                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 Session Paid — ${sessionLabel}</h2>
+                            <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${fanName}</strong> has completed payment for their session with you!</p>
                             <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
                                 <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
                                 <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
                                 <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;">${sessionLabel} (${sessionMinutes} min)</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
                             </table>
                             ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Start Session Now</a>` : '<p style="color:#9A8A72;font-size:13px;">Log into your dashboard to start the session.</p>'}
                             <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Log into your <a href="${frontendUrl}/dashboard" style="color:#D4A574;">creator dashboard</a> to manage this booking.</p>
                         </div>`;
-                    await sendEmail(creatorEmail, `🎯 New ${sessionLabel} booked by ${fanName}`, creatorHtml);
+                    await sendEmail(creatorEmail, `🎯 ${fanName} paid for their ${sessionLabel}`, creatorHtml);
                 }
 
-                // 4. Email the fan
+                // 5. Email the fan
                 if (fanEmail) {
                     const fanHtml = `
                         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">✅ Your booking is confirmed!</h2>
+                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">✅ You're all set!</h2>
                             <p style="font-size:15px;margin-bottom:16px;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid.</p>
                             <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
                                 <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
                                 <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Creator</td><td style="padding:8px 0;color:#FDF6EC;">${creatorName}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
                             </table>
                             ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Join Your Session</a>` : '<p style="color:#9A8A72;font-size:13px;">The creator will send you a session link shortly.</p>'}
                             <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Questions? Reply to this email or visit <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a></p>
@@ -652,32 +670,114 @@ app.get('/creator/earnings', requireAuth, async (req, res) => {
 
 // ── BOOKING ENDPOINTS ─────────────────────────────────────────────────────────
 
-// POST /booking — fan submits a booking request after payment
+// POST /booking — fan submits a booking REQUEST (no payment yet)
 app.post('/booking', async (req, res) => {
-    const { fanName, fanEmail, creatorHandle, sessionType, requestedDate, requestedTime, note, paymentIntentId } = req.body;
+    const { fanName, fanEmail, creatorHandle, sessionType, requestedDate, requestedTime, note } = req.body;
     if (!fanName || !fanEmail || !creatorHandle || !sessionType || !requestedDate || !requestedTime) {
         return res.status(400).json({ error: 'Missing required booking fields.' });
     }
     try {
-        // Handle format is name@truthordare — normalise by stripping leading @ if present
         const normalizedHandle = creatorHandle.replace(/^@/, '');
         const creator = await User.findOne({ handle: normalizedHandle });
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
-        const roomId = `${creator.handle.replace('@','')}-${Date.now()}`;
         const booking = await Booking.create({
             fanName, fanEmail,
             creatorName: creator.name,
             creatorEmail: creator.email,
             sessionType,
-            requestedDate: `${requestedDate} ${requestedTime}`,
-            paymentIntentId: paymentIntentId || null,
-            roomId,
+            requestedDate,
+            requestedTime,
+            note: note || null,
             status: 'pending',
         });
-        res.status(201).json({ success: true, bookingId: booking._id, roomId });
+
+        // Email the creator about the new request
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+        const creatorHtml = `
+            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 New Booking Request — ${sessionLabel}</h2>
+                <p style="font-size:15px;margin-bottom:16px;">A fan wants to book a session with you. Log into your dashboard to accept, propose a new time, or decline.</p>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;">${sessionLabel}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${requestedDate}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${requestedTime}</td></tr>
+                    ${note ? `<tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Note</td><td style="padding:8px 0;color:#FDF6EC;">${note}</td></tr>` : ''}
+                </table>
+                <a href="${frontendUrl}/dashboard" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;">📅 Respond in Dashboard</a>
+            </div>`;
+        await sendEmail(creator.email, `🎯 New booking request from ${fanName}`, creatorHtml);
+
+        // Email the fan confirming their request was sent
+        const fanHtml = `
+            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">📨 Booking Request Sent!</h2>
+                <p style="font-size:15px;margin-bottom:16px;">Your booking request has been sent to <strong style="color:#FDF6EC;">${creator.name}</strong>. You'll receive an email once they confirm your time slot — then you'll be able to complete payment.</p>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${sessionLabel}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${requestedDate}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${requestedTime}</td></tr>
+                </table>
+                <p style="font-size:13px;color:#9A8A72;">No payment has been taken yet. You will only be charged once the creator confirms your booking.</p>
+            </div>`;
+        await sendEmail(fanEmail, `📨 Booking request sent to ${creator.name}`, fanHtml);
+
+        res.status(201).json({ success: true, bookingId: booking._id });
     } catch (err) {
         console.error('Booking creation failed:', err);
         res.status(500).json({ error: 'Could not create booking.' });
+    }
+});
+
+// POST /booking/:id/generate-payment-link — creator accepted, generate Stripe payment link for fan
+app.post('/booking/:id/generate-payment-link', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.creatorEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
+
+        const PRICES = { truth: { amount: 1500, label: 'Truth Session' }, dare: { amount: 4500, label: 'Dare Session' } };
+        const price = PRICES[booking.sessionType];
+        if (!price) return res.status(400).json({ error: 'Invalid session type.' });
+
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const confirmedDate = booking.proposedDate || booking.requestedDate;
+        const confirmedTime = booking.proposedTime || booking.requestedTime;
+
+        // Generate a secure random token for fan-view auth
+        const fanToken = crypto.randomBytes(24).toString('hex');
+
+        // Save the token and mark as accepted
+        booking.token = fanToken;
+        booking.status = 'accepted';
+        await booking.save();
+
+        const confirmUrl = `${frontendUrl}/confirm.html?id=${booking._id}&token=${encodeURIComponent(fanToken)}`;
+
+        // Email the fan with the confirmation link
+        const fanHtml = `
+            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎉 Your booking has been accepted!</h2>
+                <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${user.name}</strong> has accepted your session request. Click below to complete payment and lock in your spot!</p>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${price.label}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Creator</td><td style="padding:8px 0;color:#FDF6EC;">${user.name}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Confirmed date</td><td style="padding:8px 0;color:#FDF6EC;">${confirmedDate}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Confirmed time</td><td style="padding:8px 0;color:#FDF6EC;">${confirmedTime}</td></tr>
+                </table>
+                <a href="${confirmUrl}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">💳 Complete Payment Now</a>
+                <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Questions? Visit <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a></p>
+            </div>`;
+        await sendEmail(booking.fanEmail, `🎉 ${user.name} accepted your booking — complete payment now`, fanHtml);
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Generate payment link failed:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -694,6 +794,83 @@ app.get('/creator/bookings', requireAuth, async (req, res) => {
     }
 });
 
+// GET /booking/:id/fan-view — public endpoint for fans to view their booking (token-gated)
+app.get('/booking/:id/fan-view', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        // Token must match the Stripe session ID stored on the booking, OR a simple fan token
+        const { token } = req.query;
+        if (!token || booking.token !== token) return res.status(403).json({ error: 'Invalid or expired link.' });
+        const creator = await User.findOne({ email: booking.creatorEmail });
+        res.json({
+            booking: {
+                _id: booking._id,
+                status: booking.status,
+                sessionType: booking.sessionType,
+                requestedDate: booking.requestedDate,
+                requestedTime: booking.requestedTime,
+                proposedDate: booking.proposedDate,
+                proposedTime: booking.proposedTime,
+                fanName: booking.fanName,
+                creatorHandle: creator ? creator.handle : booking.creatorName,
+                note: booking.note,
+            }
+        });
+    } catch (err) {
+        console.error('Fan view error:', err);
+        res.status(500).json({ error: 'Could not load booking.' });
+    }
+});
+
+// POST /booking/:id/checkout — fan initiates Stripe checkout after creator accepted
+app.post('/booking/:id/checkout', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        const { token } = req.body;
+        if (!token || booking.token !== token) return res.status(403).json({ error: 'Invalid or expired link.' });
+        if (!['accepted', 'proposed'].includes(booking.status)) {
+            return res.status(400).json({ error: 'This booking is not awaiting payment.' });
+        }
+        const creator = await User.findOne({ email: booking.creatorEmail });
+        const PRICES = { truth: { amount: 1500, label: 'Truth Session' }, dare: { amount: 4500, label: 'Dare Session' } };
+        const price = PRICES[booking.sessionType];
+        if (!price) return res.status(400).json({ error: 'Invalid session type.' });
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const confirmedDate = booking.proposedDate || booking.requestedDate;
+        const confirmedTime = booking.proposedTime || booking.requestedTime;
+        const sessionParams = {
+            payment_method_types: ['card'],
+            line_items: [{ price_data: { currency: 'usd', product_data: { name: `${price.label} with ${creator ? creator.name : booking.creatorName}`, description: `Confirmed for ${confirmedDate} at ${confirmedTime}` }, unit_amount: price.amount }, quantity: 1 }],
+            mode: 'payment',
+            customer_email: booking.fanEmail,
+            success_url: `${frontendUrl}/booking-confirmed.html?booking=${booking._id}`,
+            cancel_url: `${frontendUrl}/confirm.html?id=${booking._id}&token=${encodeURIComponent(token)}`,
+            metadata: {
+                creator: creator ? creator.name : booking.creatorName,
+                fan: booking.fanName,
+                type: booking.sessionType,
+                bookingDate: confirmedDate,
+                bookingTime: confirmedTime,
+                bookingId: booking._id.toString(),
+                note: booking.note || '',
+            },
+        };
+        if (creator && creator.stripeAccountId) {
+            sessionParams.payment_intent_data = {
+                application_fee_amount: Math.round(price.amount * 0.15),
+                transfer_data: { destination: creator.stripeAccountId },
+            };
+        }
+        const session = await stripe.checkout.sessions.create(sessionParams);
+        res.json({ url: session.url });
+    } catch (err) {
+        console.error('Fan checkout failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // PUT /booking/:id/respond — creator accepts, declines, or proposes new time
 app.put('/booking/:id/respond', requireAuth, async (req, res) => {
     try {
@@ -703,19 +880,45 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
         if (!booking) return res.status(404).json({ error: 'Booking not found.' });
         if (booking.creatorEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
         const { action, proposedDate, proposedTime } = req.body;
-        if (action === 'accept') {
-            booking.status = 'confirmed';
-            if (!booking.roomId) booking.roomId = `${user.handle.replace('@','')}-${Date.now()}`;
-        } else if (action === 'decline') {
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const sessionLabel = booking.sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+
+        if (action === 'decline') {
             booking.status = 'declined';
+            await booking.save();
+            // Email the fan
+            const fanHtml = `
+                <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                    <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">Booking Update</h2>
+                    <p style="font-size:15px;margin-bottom:16px;">Unfortunately, <strong style="color:#FDF6EC;">${user.name}</strong> was unable to accept your booking request for a <strong>${sessionLabel}</strong>. No payment has been taken.</p>
+                    <p style="font-size:13px;color:#9A8A72;">You can visit their profile to request a different time, or browse other creators at <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a>.</p>
+                </div>`;
+            await sendEmail(booking.fanEmail, `Booking update from ${user.name}`, fanHtml);
         } else if (action === 'propose') {
+            if (!proposedDate || !proposedTime) return res.status(400).json({ error: 'proposedDate and proposedTime required.' });
             booking.status = 'proposed';
             booking.proposedDate = proposedDate;
             booking.proposedTime = proposedTime;
+            // Generate a fan-view token if not already set
+            if (!booking.token) booking.token = crypto.randomBytes(24).toString('hex');
+            await booking.save();
+            const confirmUrl = `${frontendUrl}/confirm.html?id=${booking._id}&token=${encodeURIComponent(booking.token)}`;
+            const fanHtml = `
+                <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                    <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">📅 New Time Proposed</h2>
+                    <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${user.name}</strong> has proposed a new time for your <strong>${sessionLabel}</strong>.</p>
+                    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                        <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Proposed date</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${proposedDate}</td></tr>
+                        <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Proposed time</td><td style="padding:8px 0;color:#FDF6EC;">${proposedTime}</td></tr>
+                    </table>
+                    <p style="font-size:14px;color:#C9B99A;margin-bottom:20px;">If this time works for you, click below to complete payment and confirm your session.</p>
+                    <a href="${confirmUrl}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;">💳 View &amp; Pay Now</a>
+                    <p style="font-size:12px;color:#9A8A72;margin-top:20px;">If this time doesn't work, please contact the creator directly.</p>
+                </div>`;
+            await sendEmail(booking.fanEmail, `📅 ${user.name} proposed a new time for your session`, fanHtml);
         } else {
-            return res.status(400).json({ error: 'Invalid action.' });
+            return res.status(400).json({ error: 'Invalid action. Use generate-payment-link to accept.' });
         }
-        await booking.save();
         res.json({ success: true, booking });
     } catch (err) {
         console.error('Booking response failed:', err);
