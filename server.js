@@ -48,6 +48,7 @@ const userSchema = new mongoose.Schema({
     bio:         { type: String, default: '' },
     photo:       { type: String, default: null },
     isLive:      { type: Boolean, default: false },
+    inSession:   { type: Boolean, default: false },
     featuredRequested: { type: Boolean, default: false },
     stripeAccountId: { type: String, default: null },
     socials: {
@@ -550,6 +551,20 @@ app.put('/creator/availability', requireAuth, async (req, res) => {
     }
 });
 
+// PUT /creator/session-status — set inSession true/false (called by room.html)
+app.put('/creator/session-status', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.inSession = req.body.inSession === true;
+        await user.save();
+        console.log(`Creator ${user.name} is now ${user.inSession ? 'IN SESSION 🔴' : 'NOT in session'}`);
+        res.json({ success: true, inSession: user.inSession });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not update session status.' });
+    }
+});
+
 // POST /creator/feature-request — request to be featured on homepage
 app.post('/creator/feature-request', requireAuth, async (req, res) => {
     try {
@@ -711,7 +726,7 @@ app.get('/all-creators', async (req, res) => {
     try {
         const creators = await User.find(
             { role: 'creator', handle: { $ne: null, $ne: '' } },
-            { name: 1, handle: 1, bio: 1, photo: 1, isLive: 1, _id: 0 }
+            { name: 1, handle: 1, bio: 1, photo: 1, isLive: 1, inSession: 1, _id: 0 }
         ).sort({ isLive: -1, createdAt: -1 });
         res.json({ creators });
     } catch (err) {
@@ -724,7 +739,7 @@ app.get('/creator/:handle', async (req, res) => {
     try {
         // Handle format is name@truthordare — normalise by stripping leading @ if present
         const handle = req.params.handle.replace(/^@/, '');
-        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo extraPhotos isLive handle stripeAccountId socials');
+        const creator = await User.findOne({ handle, role: 'creator' }).select('name bio photo extraPhotos isLive inSession handle stripeAccountId socials');
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         res.json({ creator });
     } catch (err) {
