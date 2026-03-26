@@ -1117,6 +1117,78 @@ app.post('/reset-password', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Could not reset password.' }); }
 });
 
+// ── ADMIN ENDPOINTS ──────────────────────────────────────────────────────────
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'tod_admin_fix_2026';
+
+// GET /admin/stats — platform overview
+app.get('/admin/stats', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const totalCreators = await User.countDocuments({ role: 'creator' });
+        const liveCreators = await User.countDocuments({ role: 'creator', isLive: true });
+        const totalBookings = await Booking.countDocuments();
+        const pendingBookings = await Booking.countDocuments({ status: 'pending' });
+        const paidBookings = await Booking.countDocuments({ status: 'paid' });
+        const declinedBookings = await Booking.countDocuments({ status: 'declined' });
+        const PRICES = { truth: 1500, dare: 4500 };
+        const paidSessions = await Booking.find({ status: 'paid' });
+        const totalRevenue = paidSessions.reduce((sum, b) => sum + (PRICES[b.sessionType] || 0), 0);
+        const platformCut = Math.round(totalRevenue * 0.15);
+        res.json({ totalCreators, liveCreators, totalBookings, pendingBookings, paidBookings, declinedBookings, totalRevenueUSD: (totalRevenue/100).toFixed(2), platformCutUSD: (platformCut/100).toFixed(2) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /admin/creators — list all creators
+app.get('/admin/creators', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const creators = await User.find({ role: 'creator' }).select('name email handle bio photo isLive inSession stripeAccountId featuredRequested createdAt').sort({ createdAt: -1 });
+        res.json({ creators });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /admin/bookings — list all bookings
+app.get('/admin/bookings', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const bookings = await Booking.find().sort({ createdAt: -1 }).limit(100);
+        res.json({ bookings });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /admin/creator/:id — remove a creator
+app.delete('/admin/creator/:id', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const user = await User.findByIdAndDelete(req.params.id);
+        if (!user) return res.status(404).json({ error: 'Not found' });
+        await Featured.deleteMany({ email: user.email });
+        res.json({ success: true, deleted: user.name });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /admin/creator/:id/feature — approve or remove from featured
+app.put('/admin/creator/:id/feature', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const { approve } = req.body;
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ error: 'Not found' });
+        if (approve) {
+            user.featuredRequested = true;
+            await user.save();
+            const existing = await Featured.findOne({ email: user.email });
+            if (existing) { existing.approved = true; await existing.save(); }
+            else { await Featured.create({ name: user.name, email: user.email, bio: user.bio || '', photo: user.photo || null, approved: true }); }
+        } else {
+            user.featuredRequested = false;
+            await user.save();
+            await Featured.deleteMany({ email: user.email });
+        }
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Admin: fix all handles to name@truthordare format
 app.post('/admin/fix-handles', async (req, res) => {
     const { secret } = req.body;
