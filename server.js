@@ -59,6 +59,12 @@ const userSchema = new mongoose.Schema({
         tiktok:     { type: String, default: null },
     },
     extraPhotos: { type: [String], default: [] },
+    notificationPrefs: {
+        email:       { type: Boolean, default: true },
+        sms:         { type: Boolean, default: false },
+        phone:       { type: String, default: null },   // phone number for SMS
+        customHandle: { type: String, default: null },  // e.g. "DM me on Instagram @zara"
+    },
     createdAt:   { type: Date, default: Date.now },
     resetToken:  { type: String, default: null },
     resetTokenExpiry: { type: Date, default: null },
@@ -143,7 +149,7 @@ const createDailyRoom = async (sessionType) => {
 
 // Routes
 app.post('/register', async (req, res) => {
-    const { name, legalName, email, password, role, handle, socials } = req.body;
+    const { name, legalName, email, password, role, handle, socials, notificationPrefs } = req.body;
     if (!name || !email || !password || !role) return res.status(400).json({ error: 'All fields required.' });
     try {
         const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -155,7 +161,14 @@ app.post('/register', async (req, res) => {
             let h = handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
             handleFormatted = h ? `${h}@truthordare` : null;
         }
-        const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted, socials: socials || {} });
+        // Build notification prefs (default to email if not provided)
+        const notifPrefs = {
+            email: notificationPrefs?.email !== false,
+            sms: !!notificationPrefs?.sms,
+            phone: notificationPrefs?.phone || null,
+            customHandle: notificationPrefs?.customHandle || null,
+        };
+        const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted, socials: socials || {}, notificationPrefs: notifPrefs });
         const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Registration failed.' }); }
@@ -481,7 +494,7 @@ app.put('/creator/profile', requireAuth, async (req, res) => {
         const user = await User.findById(req.user.userId);
         if (!user) return res.status(404).json({ error: 'User not found.' });
         if (user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
-        const { name, bio, photo, handle, extraPhotos } = req.body;
+        const { name, bio, photo, handle, extraPhotos, socials, notificationPrefs } = req.body;
         if (name) user.name = name;
         if (bio !== undefined) user.bio = bio;
         if (photo !== undefined) user.photo = photo;
@@ -490,8 +503,19 @@ app.put('/creator/profile', requireAuth, async (req, res) => {
             let h = handle.replace(/^@/, '').replace(/@truthordare$/i, '').trim().toLowerCase().replace(/\s+/g, '');
             user.handle = h ? `${h}@truthordare` : user.handle;
         }
+        if (socials) {
+            user.socials = { ...user.socials, ...socials };
+        }
+        if (notificationPrefs) {
+            user.notificationPrefs = {
+                email: notificationPrefs.email !== undefined ? !!notificationPrefs.email : (user.notificationPrefs?.email ?? true),
+                sms: notificationPrefs.sms !== undefined ? !!notificationPrefs.sms : (user.notificationPrefs?.sms ?? false),
+                phone: notificationPrefs.phone !== undefined ? notificationPrefs.phone : (user.notificationPrefs?.phone ?? null),
+                customHandle: notificationPrefs.customHandle !== undefined ? notificationPrefs.customHandle : (user.notificationPrefs?.customHandle ?? null),
+            };
+        }
         await user.save();
-        res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle, extraPhotos: user.extraPhotos || [] } });
+        res.json({ success: true, user: { name: user.name, bio: user.bio, photo: user.photo, handle: user.handle, extraPhotos: user.extraPhotos || [], socials: user.socials || {}, notificationPrefs: user.notificationPrefs || {} } });
     } catch (err) {
         console.error('Failed to update creator profile:', err);
         res.status(500).json({ error: 'Could not update profile.' });
@@ -707,20 +731,36 @@ app.post('/notify-creator', async (req, res) => {
         const creator = await User.findOne({ handle, role: 'creator' });
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
         console.log(`🔔 Fan notification: ${fanName} (${fanEmail}) is interested in booking ${creator.name}`);
-        // Send email to creator
+        const prefs = creator.notificationPrefs || {};
+        const wantsEmail = prefs.email !== false; // default true
+        const wantsSms = !!prefs.sms;
+        const customHandle = prefs.customHandle || null;
         const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
-        const notifyHtml = `
-            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🔔 A fan is interested in booking you!</h2>
-                <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${fanName}</strong> wants to book a session with you but isn't ready to pay yet.</p>
-                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
-                </table>
-                <p style="font-size:13px;color:#9A8A72;">You can reply directly to this email to reach out to them, or share your profile link: <a href="${frontendUrl}/creator/${creator.handle}" style="color:#D4A574;">${frontendUrl}/creator/${creator.handle}</a></p>
-            </div>`;
-        await sendEmail(creator.email, `🔔 ${fanName} is interested in booking a session with you`, notifyHtml);
-        res.json({ success: true });
+
+        // Build notification methods summary for the email
+        const notifyMethods = [];
+        if (wantsEmail) notifyMethods.push('Email');
+        if (wantsSms && prefs.phone) notifyMethods.push(`SMS (${prefs.phone})`);
+        if (customHandle) notifyMethods.push(customHandle);
+
+        // 1. Send email notification if creator wants email
+        if (wantsEmail) {
+            const notifyHtml = `
+                <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                    <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🔔 A fan is interested in booking you!</h2>
+                    <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${fanName}</strong> wants to book a session with you but isn't ready to pay yet.</p>
+                    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                        <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                        <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
+                    </table>
+                    ${customHandle ? `<p style="font-size:14px;color:#FDF6EC;margin-bottom:12px;">You also asked to be contacted via: <strong>${customHandle}</strong></p>` : ''}
+                    <p style="font-size:13px;color:#9A8A72;">Reply directly to this email to reach out, or share your profile: <a href="${frontendUrl}/creator/${creator.handle}" style="color:#D4A574;">${frontendUrl}/creator/${creator.handle}</a></p>
+                </div>`;
+            await sendEmail(creator.email, `🔔 ${fanName} is interested in booking a session with you`, notifyHtml);
+        }
+
+        // 2. Return the creator's custom handle to the fan (so they know how to reach the creator)
+        res.json({ success: true, notifyMethods, customHandle });
     } catch (err) {
         console.error('Notify creator failed:', err);
         res.status(500).json({ error: 'Could not send notification.' });
