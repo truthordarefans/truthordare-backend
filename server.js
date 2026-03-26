@@ -781,6 +781,31 @@ app.post('/booking/:id/generate-payment-link', requireAuth, async (req, res) => 
     }
 });
 
+// ── FAN ENDPOINTS ──────────────────────────────────────────────────────────
+
+// GET /fan/bookings — fan sees all their bookings
+app.get('/fan/bookings', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'fan') return res.status(403).json({ error: 'Fan only.' });
+        const bookings = await Booking.find({ fanEmail: user.email }).sort({ createdAt: -1 });
+        res.json({ bookings });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not fetch bookings.' });
+    }
+});
+
+// GET /fan/profile — fan sees their own profile
+app.get('/fan/profile', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select('name email role createdAt');
+        if (!user || user.role !== 'fan') return res.status(403).json({ error: 'Fan only.' });
+        res.json({ user });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not fetch profile.' });
+    }
+});
+
 // GET /creator/bookings — creator sees all pending/upcoming bookings
 app.get('/creator/bookings', requireAuth, async (req, res) => {
     try {
