@@ -294,10 +294,81 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
     // Handle the event
     if (event.type === 'checkout.session.completed') {
         const session = event.data.object;
-        console.log('Payment successful:', { sessionId: session.id, amount: session.amount_total, currency: session.currency });
-        // Fulfill the purchase...
-        // For now, just log it
-        console.log('Payment:', { creator: session.metadata.creator, fan: session.metadata.fan, total: `$${(session.amount_total/100).toFixed(2)}` });
+        const { creator: creatorName, fan: fanName, type: sessionType, bookingDate, bookingTime } = session.metadata || {};
+        const fanEmail = session.customer_details?.email || session.metadata?.fanEmail || '';
+        console.log(`✅ Payment confirmed: ${fanName} booked ${sessionType} with ${creatorName} — $${(session.amount_total/100).toFixed(2)}`);
+
+        // Run async post-payment fulfillment (don't await — respond to Stripe immediately)
+        (async () => {
+            try {
+                // 1. Find the creator in the DB to get their email
+                const creator = await User.findOne({ name: creatorName, role: 'creator' });
+                const creatorEmail = creator ? creator.email : null;
+                const creatorHandle = creator ? creator.handle : '';
+                const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+                const sessionMinutes = sessionType === 'truth' ? 5 : 15;
+                const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+
+                // 2. Create a Daily.co video room
+                let roomUrl = null;
+                let roomId = null;
+                if (process.env.DAILY_API_KEY) {
+                    try {
+                        const room = await createDailyRoom(sessionType);
+                        roomUrl = room.url;
+                        roomId = room.name;
+                        console.log(`🎥 Daily.co room created: ${roomUrl}`);
+                    } catch (e) {
+                        console.error('Daily.co room creation failed:', e.message);
+                    }
+                }
+
+                const roomLink = roomUrl
+                    ? `${frontendUrl}/room?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}`
+                    : null;
+
+                // 3. Email the creator
+                if (creatorEmail) {
+                    const creatorHtml = `
+                        <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 New Booking — ${sessionLabel}</h2>
+                            <p style="font-size:15px;margin-bottom:16px;">A fan just paid and is ready for their session with you!</p>
+                            <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;">${sessionLabel} (${sessionMinutes} min)</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                            </table>
+                            ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Start Session Now</a>` : '<p style="color:#9A8A72;font-size:13px;">Log into your dashboard to start the session.</p>'}
+                            <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Log into your <a href="${frontendUrl}/dashboard" style="color:#D4A574;">creator dashboard</a> to manage this booking.</p>
+                        </div>`;
+                    await sendEmail(creatorEmail, `🎯 New ${sessionLabel} booked by ${fanName}`, creatorHtml);
+                }
+
+                // 4. Email the fan
+                if (fanEmail) {
+                    const fanHtml = `
+                        <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">✅ Your booking is confirmed!</h2>
+                            <p style="font-size:15px;margin-bottom:16px;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid.</p>
+                            <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Creator</td><td style="padding:8px 0;color:#FDF6EC;">${creatorName}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                            </table>
+                            ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Join Your Session</a>` : '<p style="color:#9A8A72;font-size:13px;">The creator will send you a session link shortly.</p>'}
+                            <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Questions? Reply to this email or visit <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a></p>
+                        </div>`;
+                    await sendEmail(fanEmail, `✅ Your ${sessionLabel} with ${creatorName} is confirmed`, fanHtml);
+                }
+
+                console.log(`📧 Post-payment emails sent — creator: ${creatorEmail}, fan: ${fanEmail}`);
+            } catch (err) {
+                console.error('Post-payment fulfillment error:', err.message);
+            }
+        })();
     }
     // Return a 200 response to acknowledge receipt of the event
     res.json({ received: true });
@@ -635,9 +706,20 @@ app.post('/notify-creator', async (req, res) => {
         const handle = creatorHandle.replace(/^@/, '');
         const creator = await User.findOne({ handle, role: 'creator' });
         if (!creator) return res.status(404).json({ error: 'Creator not found.' });
-        // Log the notification (email sending can be wired in later)
         console.log(`🔔 Fan notification: ${fanName} (${fanEmail}) is interested in booking ${creator.name}`);
-        // TODO: send email to creator.email using nodemailer/sendgrid when configured
+        // Send email to creator
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const notifyHtml = `
+            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
+                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🔔 A fan is interested in booking you!</h2>
+                <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${fanName}</strong> wants to book a session with you but isn't ready to pay yet.</p>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
+                </table>
+                <p style="font-size:13px;color:#9A8A72;">You can reply directly to this email to reach out to them, or share your profile link: <a href="${frontendUrl}/creator/${creator.handle}" style="color:#D4A574;">${frontendUrl}/creator/${creator.handle}</a></p>
+            </div>`;
+        await sendEmail(creator.email, `🔔 ${fanName} is interested in booking a session with you`, notifyHtml);
         res.json({ success: true });
     } catch (err) {
         console.error('Notify creator failed:', err);
