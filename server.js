@@ -1305,7 +1305,7 @@ app.post('/admin/reset-password', async (req, res) => {
     if (!email || !newPassword) return res.status(400).json({ error: 'email and newPassword required' });
     try {
         const hash = await bcrypt.hash(newPassword, 10);
-        const result = await User.findOneAndUpdate({ email }, { $set: { password: hash } }, { new: true });
+        const result = await User.findOneAndUpdate({ email }, { $set: { passwordHash: hash } }, { new: true });
         if (!result) return res.status(404).json({ error: 'User not found' });
         res.json({ success: true, message: `Password reset for ${result.name} (${result.email})` });
     } catch (err) { res.status(500).json({ error: err.message }); }
