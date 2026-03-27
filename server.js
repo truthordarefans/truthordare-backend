@@ -24,6 +24,28 @@ async function sendEmail(to, subject, html) {
     } catch (err) { console.error('Email send error:', err.message); }
 }
 
+// Branded HTML email template builder
+function emailTemplate({ title, preheader = '', bodyHtml, ctaUrl = null, ctaText = null, footerNote = '' }) {
+    const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${title}</title></head>
+<body style="margin:0;padding:0;background:#1a0000;font-family:'Helvetica Neue',Arial,sans-serif;">
+<span style="display:none;max-height:0;overflow:hidden;">${preheader}</span>
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#1a0000;padding:32px 16px;"><tr><td align="center">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#0d0000;border:1px solid rgba(212,165,116,0.35);border-radius:14px;overflow:hidden;">
+<tr><td style="background:linear-gradient(135deg,#8B0000 0%,#5c0000 100%);padding:24px 32px;text-align:center;border-bottom:2px solid rgba(212,165,116,0.4);">
+  <p style="margin:0 0 4px 0;font-size:11px;letter-spacing:2px;color:#D4A574;text-transform:uppercase;font-weight:700;">Truth or Dare For My Fans</p>
+  <h1 style="margin:0;font-size:22px;color:#FDF6EC;font-weight:800;line-height:1.3;">${title}</h1>
+</td></tr>
+<tr><td style="padding:28px 32px;">
+  ${bodyHtml}
+  ${ctaUrl && ctaText ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0 0 0;"><tr><td align="center"><a href="${ctaUrl}" style="display:inline-block;background:#D4A574;color:#120500;padding:15px 36px;border-radius:8px;font-weight:800;font-size:15px;text-decoration:none;letter-spacing:0.5px;">${ctaText}</a></td></tr></table>` : ''}
+</td></tr>
+<tr><td style="background:rgba(0,0,0,0.3);padding:16px 32px;border-top:1px solid rgba(212,165,116,0.15);text-align:center;">
+  ${footerNote ? `<p style="margin:0 0 8px 0;font-size:12px;color:#9A8A72;">${footerNote}</p>` : ''}
+  <p style="margin:0;font-size:11px;color:#6B5A4A;">© 2026 <a href="${frontendUrl}" style="color:#D4A574;text-decoration:none;">truthordareformyfans.com</a> &nbsp;·&nbsp; <a href="${frontendUrl}/terms.html" style="color:#9A8A72;text-decoration:none;">Terms</a> &nbsp;·&nbsp; <a href="${frontendUrl}/privacy.html" style="color:#9A8A72;text-decoration:none;">Privacy</a></p>
+</td></tr></table></td></tr></table></body></html>`;
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'tod_secret_change_me';
@@ -376,38 +398,41 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
 
                 // 4. Email the creator
                 if (creatorEmail) {
-                    const creatorHtml = `
-                        <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 Session Paid — ${sessionLabel}</h2>
-                            <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${fanName}</strong> has completed payment for their session with you!</p>
-                            <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;">${sessionLabel} (${sessionMinutes} min)</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
-                            </table>
-                            ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Start Session Now</a>` : '<p style="color:#9A8A72;font-size:13px;">Log into your dashboard to start the session.</p>'}
-                            <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Log into your <a href="${frontendUrl}/dashboard" style="color:#D4A574;">creator dashboard</a> to manage this booking.</p>
-                        </div>`;
+                    const creatorHtml = emailTemplate({
+                        title: `🎯 Session Confirmed — ${sessionLabel}`,
+                        preheader: `${fanName} has paid — your session room is ready`,
+                        bodyHtml: `
+                            <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;"><strong style="color:#FDF6EC;">${fanName}</strong> has completed payment. Your session room is ready!</p>
+                            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Fan</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                            </table>`,
+                        ctaUrl: roomLink || `${frontendUrl}/dashboard`,
+                        ctaText: roomLink ? '▶ Start Session Now' : '📊 Go to Dashboard',
+                        footerNote: 'Log into your creator dashboard to manage this booking.'
+                    });
                     await sendEmail(creatorEmail, `🎯 ${fanName} paid for their ${sessionLabel}`, creatorHtml);
                 }
 
                 // 5. Email the fan
                 if (fanEmail) {
-                    const fanHtml = `
-                        <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                            <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">✅ You're all set!</h2>
-                            <p style="font-size:15px;margin-bottom:16px;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid.</p>
-                            <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Creator</td><td style="padding:8px 0;color:#FDF6EC;">${creatorName}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Date</td><td style="padding:8px 0;color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
-                                <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:8px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
-                            </table>
-                            ${roomLink ? `<a href="${roomLink}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">▶ Join Your Session</a>` : '<p style="color:#9A8A72;font-size:13px;">The creator will send you a session link shortly.</p>'}
-                            <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Questions? Reply to this email or visit <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a></p>
-                        </div>`;
+                    const fanHtml = emailTemplate({
+                        title: '✅ You’re All Set!',
+                        preheader: `Your ${sessionLabel} with ${creatorName} is confirmed and paid`,
+                        bodyHtml: `
+                            <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid. Your session room is ready!</p>
+                            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Creator</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${creatorName}</td></tr>
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
+                                <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                            </table>`,
+                        ctaUrl: roomLink || `${frontendUrl}/fan-dashboard.html`,
+                        ctaText: roomLink ? '▶ Join Your Session' : '📊 Go to Your Dashboard',
+                        footerNote: 'Questions? Reply to this email or visit truthordareformyfans.com'
+                    });
                     await sendEmail(fanEmail, `✅ Your ${sessionLabel} with ${creatorName} is confirmed`, fanHtml);
                 }
 
@@ -694,34 +719,39 @@ app.post('/booking', async (req, res) => {
         // Email the creator about the new request
         const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
         const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
-        const creatorHtml = `
-            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎯 New Booking Request — ${sessionLabel}</h2>
-                <p style="font-size:15px;margin-bottom:16px;">A fan wants to book a session with you. Log into your dashboard to accept, propose a new time, or decline.</p>
-                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan name</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:8px 0;color:#FDF6EC;">${fanEmail}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;">${sessionLabel}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${requestedDate}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${requestedTime}</td></tr>
-                    ${note ? `<tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Note</td><td style="padding:8px 0;color:#FDF6EC;">${note}</td></tr>` : ''}
-                </table>
-                <a href="${frontendUrl}/dashboard" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;">📅 Respond in Dashboard</a>
-            </div>`;
+        const creatorHtml = emailTemplate({
+            title: `🎯 New Booking Request`,
+            preheader: `${fanName} wants to book a ${sessionLabel} with you`,
+            bodyHtml: `
+                <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;">A fan wants to book a session with you. Log into your dashboard to accept, propose a new time, or decline.</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Fan name</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Fan email</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${fanEmail}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Session type</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${requestedDate}</td></tr>
+                    <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:9px 0;color:#FDF6EC;">${requestedTime}</td></tr>
+                    ${note ? `<tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Note from fan</td><td style="padding:9px 0;color:#FDF6EC;font-style:italic;">${note}</td></tr>` : ''}
+                </table>`,
+            ctaUrl: `${frontendUrl}/dashboard`,
+            ctaText: '📅 Respond in Dashboard',
+            footerNote: 'You received this because a fan booked a session with you on Truth or Dare For My Fans.'
+        });
         await sendEmail(creator.email, `🎯 New booking request from ${fanName}`, creatorHtml);
 
         // Email the fan confirming their request was sent
-        const fanHtml = `
-            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">📨 Booking Request Sent!</h2>
-                <p style="font-size:15px;margin-bottom:16px;">Your booking request has been sent to <strong style="color:#FDF6EC;">${creator.name}</strong>. You'll receive an email once they confirm your time slot — then you'll be able to complete payment.</p>
-                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session type</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${sessionLabel}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:8px 0;color:#FDF6EC;">${requestedDate}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:8px 0;color:#FDF6EC;">${requestedTime}</td></tr>
+        const fanHtml = emailTemplate({
+            title: '📨 Booking Request Sent!',
+            preheader: `Your request to ${creator.name} has been received`,
+            bodyHtml: `
+                <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;">Your booking request has been sent to <strong style="color:#FDF6EC;">${creator.name}</strong>. You'll receive an email once they confirm your time slot — then you'll be able to complete payment.</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Session type</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Requested date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${requestedDate}</td></tr>
+                    <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Requested time</td><td style="padding:9px 0;color:#FDF6EC;">${requestedTime}</td></tr>
                 </table>
-                <p style="font-size:13px;color:#9A8A72;">No payment has been taken yet. You will only be charged once the creator confirms your booking.</p>
-            </div>`;
+                <p style="font-size:13px;color:#9A8A72;margin-top:16px;">No payment has been taken yet. You will only be charged once the creator confirms your booking.</p>`,
+            footerNote: 'You received this because you submitted a booking request on Truth or Dare For My Fans.'
+        });
         await sendEmail(fanEmail, `📨 Booking request sent to ${creator.name}`, fanHtml);
 
         res.status(201).json({ success: true, bookingId: booking._id });
@@ -759,19 +789,21 @@ app.post('/booking/:id/generate-payment-link', requireAuth, async (req, res) => 
         const confirmUrl = `${frontendUrl}/confirm.html?id=${booking._id}&token=${encodeURIComponent(fanToken)}`;
 
         // Email the fan with the confirmation link
-        const fanHtml = `
-            <div style="font-family:sans-serif;max-width:560px;margin:0 auto;background:#0d0000;color:#C9B99A;padding:32px;border-radius:12px;border:1px solid rgba(212,165,116,0.3);">
-                <h2 style="color:#D4A574;font-size:22px;margin-bottom:8px;">🎉 Your booking has been accepted!</h2>
-                <p style="font-size:15px;margin-bottom:16px;"><strong style="color:#FDF6EC;">${user.name}</strong> has accepted your session request. Click below to complete payment and lock in your spot!</p>
-                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Session</td><td style="padding:8px 0;color:#FDF6EC;font-weight:700;">${price.label}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Creator</td><td style="padding:8px 0;color:#FDF6EC;">${user.name}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Confirmed date</td><td style="padding:8px 0;color:#FDF6EC;">${confirmedDate}</td></tr>
-                    <tr><td style="padding:8px 0;color:#9A8A72;font-size:13px;">Confirmed time</td><td style="padding:8px 0;color:#FDF6EC;">${confirmedTime}</td></tr>
-                </table>
-                <a href="${confirmUrl}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;margin-bottom:16px;">💳 Complete Payment Now</a>
-                <p style="font-size:12px;color:#9A8A72;margin-top:20px;">Questions? Visit <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a></p>
-            </div>`;
+        const fanHtml = emailTemplate({
+            title: '🎉 Your Booking is Accepted!',
+            preheader: `${user.name} accepted your session — complete payment to lock in your spot`,
+            bodyHtml: `
+                <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;"><strong style="color:#FDF6EC;">${user.name}</strong> has accepted your session request. Click below to complete payment and lock in your spot!</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${price.label}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Creator</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${user.name}</td></tr>
+                    <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Confirmed date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${confirmedDate}</td></tr>
+                    <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Confirmed time</td><td style="padding:9px 0;color:#FDF6EC;">${confirmedTime}</td></tr>
+                </table>`,
+            ctaUrl: confirmUrl,
+            ctaText: '💳 Complete Payment Now',
+            footerNote: 'You received this because a creator accepted your booking on Truth or Dare For My Fans.'
+        });
         await sendEmail(booking.fanEmail, `🎉 ${user.name} accepted your booking — complete payment now`, fanHtml);
 
         res.json({ success: true });
