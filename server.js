@@ -1298,6 +1298,19 @@ app.post('/admin/delete-creator', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Admin: reset any user's password by email
+app.post('/admin/reset-password', async (req, res) => {
+    const { secret, email, newPassword } = req.body;
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    if (!email || !newPassword) return res.status(400).json({ error: 'email and newPassword required' });
+    try {
+        const hash = await bcrypt.hash(newPassword, 10);
+        const result = await User.findOneAndUpdate({ email }, { $set: { password: hash } }, { new: true });
+        if (!result) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, message: `Password reset for ${result.name} (${result.email})` });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
