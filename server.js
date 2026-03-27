@@ -736,7 +736,9 @@ app.post('/booking', async (req, res) => {
             ctaText: '📅 Respond in Dashboard',
             footerNote: 'You received this because a fan booked a session with you on Truth or Dare For My Fans.'
         });
-        await sendEmail(creator.email, `🎯 New booking request from ${fanName}`, creatorHtml);
+        // Send emails non-blocking so booking succeeds even if email fails
+        sendEmail(creator.email, `🎯 New booking request from ${fanName}`, creatorHtml)
+            .catch(e => console.error('Creator email failed:', e.message));
 
         // Email the fan confirming their request was sent
         const fanHtml = emailTemplate({
@@ -752,7 +754,8 @@ app.post('/booking', async (req, res) => {
                 <p style="font-size:13px;color:#9A8A72;margin-top:16px;">No payment has been taken yet. You will only be charged once the creator confirms your booking.</p>`,
             footerNote: 'You received this because you submitted a booking request on Truth or Dare For My Fans.'
         });
-        await sendEmail(fanEmail, `📨 Booking request sent to ${creator.name}`, fanHtml);
+        sendEmail(fanEmail, `📨 Booking request sent to ${creator.name}`, fanHtml)
+            .catch(e => console.error('Fan email failed:', e.message));
 
         res.status(201).json({ success: true, bookingId: booking._id });
     } catch (err) {
@@ -804,7 +807,8 @@ app.post('/booking/:id/generate-payment-link', requireAuth, async (req, res) => 
             ctaText: '💳 Complete Payment Now',
             footerNote: 'You received this because a creator accepted your booking on Truth or Dare For My Fans.'
         });
-        await sendEmail(booking.fanEmail, `🎉 ${user.name} accepted your booking — complete payment now`, fanHtml);
+        sendEmail(booking.fanEmail, `🎉 ${user.name} accepted your booking — complete payment now`, fanHtml)
+            .catch(e => console.error('Payment link email failed:', e.message));
 
         res.json({ success: true });
     } catch (err) {
@@ -950,7 +954,8 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
                     <p style="font-size:15px;margin-bottom:16px;">Unfortunately, <strong style="color:#FDF6EC;">${user.name}</strong> was unable to accept your booking request for a <strong>${sessionLabel}</strong>. No payment has been taken.</p>
                     <p style="font-size:13px;color:#9A8A72;">You can visit their profile to request a different time, or browse other creators at <a href="${frontendUrl}" style="color:#D4A574;">truthordareformyfans.com</a>.</p>
                 </div>`;
-            await sendEmail(booking.fanEmail, `Booking update from ${user.name}`, fanHtml);
+            sendEmail(booking.fanEmail, `Booking update from ${user.name}`, fanHtml)
+                .catch(e => console.error('Decline email failed:', e.message));
         } else if (action === 'propose') {
             if (!proposedDate || !proposedTime) return res.status(400).json({ error: 'proposedDate and proposedTime required.' });
             booking.status = 'proposed';
@@ -972,7 +977,8 @@ app.put('/booking/:id/respond', requireAuth, async (req, res) => {
                     <a href="${confirmUrl}" style="display:inline-block;background:#D4A574;color:#120500;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px;text-decoration:none;">💳 View &amp; Pay Now</a>
                     <p style="font-size:12px;color:#9A8A72;margin-top:20px;">If this time doesn't work, please contact the creator directly.</p>
                 </div>`;
-            await sendEmail(booking.fanEmail, `📅 ${user.name} proposed a new time for your session`, fanHtml);
+            sendEmail(booking.fanEmail, `📅 ${user.name} proposed a new time for your session`, fanHtml)
+                .catch(e => console.error('Propose email failed:', e.message));
         } else {
             return res.status(400).json({ error: 'Invalid action. Use generate-payment-link to accept.' });
         }
