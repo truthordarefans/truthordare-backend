@@ -1311,6 +1311,18 @@ app.post('/admin/reset-password', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Admin: delete any user by email
+app.post('/admin/delete-user', async (req, res) => {
+    const { secret, email } = req.body;
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    if (!email) return res.status(400).json({ error: 'email required' });
+    try {
+        const result = await User.findOneAndDelete({ email: email.toLowerCase() });
+        if (!result) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, deleted: result.name, email: result.email, role: result.role });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
