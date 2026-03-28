@@ -6,21 +6,19 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Email transporter (uses Gmail via app password or SMTP env vars)
-const emailTransporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER || 'truthordarefans@gmail.com',
-        pass: process.env.EMAIL_PASS,  // App password set in Render env vars
-    },
-});
 async function sendEmail(to, subject, html) {
-    if (!process.env.EMAIL_PASS) { console.warn('EMAIL_PASS not set — skipping email'); return; }
+    if (!process.env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set — skipping email'); return; }
     try {
-        await emailTransporter.sendMail({ from: '"Truth or Dare For My Fans" <truthordarefans@gmail.com>', to, subject, html });
-        console.log(`📧 Email sent to ${to}: ${subject}`);
+        const { error } = await resend.emails.send({
+            from: 'Truth or Dare For My Fans <onboarding@resend.dev>',
+            to,
+            subject,
+            html,
+        });
+        if (error) { console.error('Resend error:', error); } else { console.log(`📧 Email sent to ${to}: ${subject}`); }
     } catch (err) { console.error('Email send error:', err.message); }
 }
 
