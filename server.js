@@ -286,7 +286,7 @@ app.post('/create-checkout-session', async (req, res) => {
                 quantity: 1
             }],
             mode: 'payment',
-            success_url: `${FRONTEND}?success=1`,
+            success_url: `${FRONTEND}/booking-confirmed.html?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${FRONTEND}?canceled=1`,
             metadata: { creator: creatorName, fan: fanName, type: selectedCard, bookingDate: bookingDate || '', bookingTime: bookingTime || '', note: note || '' },
         };
