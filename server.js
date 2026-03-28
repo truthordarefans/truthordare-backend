@@ -205,6 +205,16 @@ app.post('/register', async (req, res) => {
             customHandle: notificationPrefs?.customHandle || null,
         };
         const user = await User.create({ name, legalName: legalName || null, email: email.toLowerCase(), passwordHash, role, handle: handleFormatted, socials: socials || {}, notificationPrefs: notifPrefs });
+        
+        // Notify admin
+        const adminEmail = 'Truthordarefans@gmail.com';
+        const adminHtml = emailTemplate({
+            title: `New ${role === 'creator' ? 'Creator' : 'Fan'} Registered`,
+            preheader: `New user registration: ${name}`,
+            bodyHtml: `<p style="color:#FDF6EC;">A new ${role} just registered!</p><ul><li style="color:#C9B99A;">Name: ${name}</li><li style="color:#C9B99A;">Email: ${email}</li>${handleFormatted ? `<li style="color:#C9B99A;">Handle: ${handleFormatted}</li>` : ''}</ul>`,
+        });
+        sendEmail(adminEmail, `🚨 New ${role} registered: ${name}`, adminHtml).catch(e => console.error(e));
+
         const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Registration failed.' }); }
@@ -393,6 +403,15 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                         console.error('Failed to update booking record:', e.message);
                     }
                 }
+
+                // Notify admin of payment
+                const adminEmail = 'Truthordarefans@gmail.com';
+                const adminHtml3 = emailTemplate({
+                    title: `Payment Received!`,
+                    preheader: `${fanName} paid for session with ${creatorName}`,
+                    bodyHtml: `<p style="color:#FDF6EC;">A payment of $${(session.amount_total/100).toFixed(2)} was successfully processed.</p><ul><li style="color:#C9B99A;">Fan: ${fanName}</li><li style="color:#C9B99A;">Creator: ${creatorName}</li><li style="color:#C9B99A;">Type: ${sessionType}</li></ul>`,
+                });
+                sendEmail(adminEmail, `💰 Payment Received: $${(session.amount_total/100).toFixed(2)} from ${fanName}`, adminHtml3).catch(e => console.error(e));
 
                 // 4. Email the creator
                 if (creatorEmail) {
@@ -713,6 +732,15 @@ app.post('/booking', async (req, res) => {
             note: note || null,
             status: 'pending',
         });
+
+        // Notify admin
+        const adminEmail = 'Truthordarefans@gmail.com';
+        const adminHtml2 = emailTemplate({
+            title: `New Booking Request`,
+            preheader: `${fanName} requested a session with ${creator.name}`,
+            bodyHtml: `<p style="color:#FDF6EC;">A new booking request was just submitted!</p><ul><li style="color:#C9B99A;">Fan: ${fanName}</li><li style="color:#C9B99A;">Creator: ${creator.name}</li><li style="color:#C9B99A;">Type: ${sessionType}</li><li style="color:#C9B99A;">Date: ${requestedDate}</li><li style="color:#C9B99A;">Time: ${requestedTime}</li></ul>`,
+        });
+        sendEmail(adminEmail, `📅 New Booking Request: ${fanName} for ${creator.name}`, adminHtml2).catch(e => console.error(e));
 
         // Email the creator about the new request
         const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
