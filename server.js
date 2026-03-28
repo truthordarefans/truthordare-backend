@@ -250,6 +250,18 @@ app.post('/admin-reset-password', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Reset failed.' }); }
 });
 
+// Temporary admin delete user route
+app.post('/admin-delete-user', async (req, res) => {
+    const { secret, email } = req.body;
+    if (secret !== 'TOD_ADMIN_2026') return res.status(403).json({ error: 'Forbidden.' });
+    if (!email) return res.status(400).json({ error: 'Email required.' });
+    try {
+        const result = await User.deleteOne({ email: email.toLowerCase() });
+        if (result.deletedCount === 0) return res.status(404).json({ error: 'User not found.' });
+        res.json({ success: true, message: `Deleted user: ${email}` });
+    } catch (err) { res.status(500).json({ error: 'Delete failed.' }); }
+});
+
 app.post('/create-checkout-session', async (req, res) => {
     const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note } = req.body;
     if (!selectedCard || !creatorName || !fanName) return res.status(400).json({ error: 'Missing fields.' });
