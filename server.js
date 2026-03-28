@@ -262,6 +262,18 @@ app.post('/admin-delete-user', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Delete failed.' }); }
 });
 
+app.post('/admin-delete-bookings', async (req, res) => {
+    const { secret, creatorName, fanEmail } = req.body;
+    if (secret !== 'TOD_ADMIN_2026') return res.status(403).json({ error: 'Forbidden.' });
+    try {
+        const query = {};
+        if (creatorName) query.creatorName = new RegExp(creatorName, 'i');
+        if (fanEmail) query.fanEmail = fanEmail.toLowerCase();
+        const result = await Booking.deleteMany(query);
+        res.json({ success: true, deleted: result.deletedCount });
+    } catch (err) { res.status(500).json({ error: 'Delete failed.' }); }
+});
+
 app.post('/create-checkout-session', async (req, res) => {
     const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note } = req.body;
     if (!selectedCard || !creatorName || !fanName) return res.status(400).json({ error: 'Missing fields.' });
