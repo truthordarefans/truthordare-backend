@@ -121,6 +121,9 @@ const bookingSchema = new mongoose.Schema({
     requestedDate: { type: String, required: true },
     proposedDate: { type: String, default: null },
     proposedTime: { type: String, default: null },
+    counterProposals: { type: Array, default: [] }, // [{date, time}, {date, time}, {date, time}]
+    fanChosenDate: { type: String, default: null },
+    fanChosenTime: { type: String, default: null },
     status:      { type: String, enum: ['pending', 'accepted', 'declined', 'proposed', 'confirmed', 'expired', 'refused'], default: 'pending' },
     requestedTime: { type: String, default: null },
     note:        { type: String, default: null },
@@ -880,6 +883,89 @@ app.post('/booking/:id/generate-payment-link', requireAuth, async (req, res) => 
         res.json({ success: true });
     } catch (err) {
         console.error('Generate payment link failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /booking/:id/counter-propose — creator proposes up to 3 alternative times
+app.post('/booking/:id/counter-propose', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.creatorEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
+
+        const { proposals } = req.body; // Array of {date, time} objects, max 3
+        if (!proposals || !Array.isArray(proposals) || proposals.length === 0 || proposals.length > 3) {
+            return res.status(400).json({ error: 'Please provide 1 to 3 time proposals.' });
+        }
+        for (const p of proposals) {
+            if (!p.date || !p.time) return res.status(400).json({ error: 'Each proposal must have a date and time.' });
+        }
+
+        booking.counterProposals = proposals;
+        booking.status = 'proposed';
+        await booking.save();
+
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const sessionLabel = booking.sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+
+        // Build proposal list HTML
+        const proposalRows = proposals.map((p, i) => `<tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Option ${i+1}</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${p.date} at ${p.time}</td></tr>`).join('');
+
+        const fanHtml = emailTemplate({
+            title: '📅 Creator Proposed New Times',
+            preheader: `${user.name} suggested alternative times for your session`,
+            bodyHtml: `
+                <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;"><strong style="color:#FDF6EC;">${user.name}</strong> has proposed alternative times for your <strong style="color:#D4A574;">${sessionLabel}</strong>. Log into your dashboard to pick a time and complete payment.</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;">
+                    ${proposalRows}
+                </table>`,
+            ctaUrl: `${frontendUrl}/fan-dashboard.html`,
+            ctaText: '📅 Choose a Time & Pay',
+            footerNote: 'You received this because a creator responded to your booking request on Truth or Dare For My Fans.'
+        });
+        sendEmail(booking.fanEmail, `📅 ${user.name} proposed new times for your session`, fanHtml)
+            .catch(e => console.error('Counter-proposal email failed:', e.message));
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Counter-propose failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /booking/:id/fan-choose — fan picks one of the counter-proposed times
+app.post('/booking/:id/fan-choose', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'fan') return res.status(403).json({ error: 'Fan only.' });
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.fanEmail !== user.email) return res.status(403).json({ error: 'Not your booking.' });
+        if (booking.status !== 'proposed') return res.status(400).json({ error: 'No counter-proposal to respond to.' });
+
+        const { date, time } = req.body;
+        if (!date || !time) return res.status(400).json({ error: 'Please provide a date and time.' });
+
+        booking.fanChosenDate = date;
+        booking.fanChosenTime = time;
+        booking.proposedDate = date;
+        booking.proposedTime = time;
+        booking.status = 'accepted';
+
+        // Generate a secure token for payment link
+        const fanToken = require('crypto').randomBytes(24).toString('hex');
+        booking.token = fanToken;
+        await booking.save();
+
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const confirmUrl = `${frontendUrl}/confirm.html?id=${booking._id}&token=${encodeURIComponent(fanToken)}`;
+
+        res.json({ success: true, paymentUrl: confirmUrl });
+    } catch (err) {
+        console.error('Fan choose failed:', err);
         res.status(500).json({ error: err.message });
     }
 });
