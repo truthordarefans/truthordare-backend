@@ -233,6 +233,23 @@ app.post('/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Login failed.' }); }
 });
 
+// Temporary admin password reset — secured by secret key
+app.post('/admin-reset-password', async (req, res) => {
+    const { secret, email, newPassword } = req.body;
+    if (secret !== 'TOD_ADMIN_2026') return res.status(403).json({ error: 'Forbidden.' });
+    if (!email || !newPassword) return res.status(400).json({ error: 'Email and newPassword required.' });
+    try {
+        const passwordHash = await bcrypt.hash(newPassword, 10);
+        const user = await User.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { passwordHash },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ error: 'User not found.' });
+        res.json({ success: true, message: `Password reset for ${email}` });
+    } catch (err) { res.status(500).json({ error: 'Reset failed.' }); }
+});
+
 app.post('/create-checkout-session', async (req, res) => {
     const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note } = req.body;
     if (!selectedCard || !creatorName || !fanName) return res.status(400).json({ error: 'Missing fields.' });
