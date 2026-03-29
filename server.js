@@ -231,7 +231,7 @@ app.post('/register', async (req, res) => {
         });
         sendEmail(adminEmail, `🚨 New ${role} registered: ${name}`, adminHtml).catch(e => console.error(e));
 
-        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET);
         res.status(201).json({ message: 'User registered.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Registration failed.' }); }
 });
@@ -244,7 +244,7 @@ app.post('/login', async (req, res) => {
         if (!user) return res.status(401).json({ error: 'Invalid credentials.' });
         const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) return res.status(401).json({ error: 'Invalid credentials.' });
-        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET);
         res.json({ message: 'Logged in.', token, role: user.role, handle: user.handle });
     } catch (err) { res.status(500).json({ error: 'Login failed.' }); }
 });
