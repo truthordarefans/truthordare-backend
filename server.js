@@ -107,7 +107,6 @@ const chatSchema = new mongoose.Schema({
     roomId:      { type: String, required: true },
     name:        { type: String, required: true },
     role:        { type: String, required: true },
-    message:     { type: String, required: true },
     createdAt:   { type: Date, default: Date.now },
 });
 const ChatMessage = mongoose.model('ChatMessage', chatSchema);
@@ -131,6 +130,11 @@ const bookingSchema = new mongoose.Schema({
     roomId:      { type: String, default: null },
     roomUrl:     { type: String, default: null },
     token:       { type: String, default: null },
+    sessionPin:  { type: String, default: null },   // 4-digit PIN for room entry
+    stripeCustomerId: { type: String, default: null }, // Saved card customer ID
+    extensionPending: { type: String, default: null }, // 'truth' or 'dare' if fan requested extension
+    extensionStatus: { type: String, default: null }, // 'requested', 'accepted', 'declined', 'extended'
+    extensionType: { type: String, default: null }, // 'truth' or 'dare' for the extension
     createdAt:   { type: Date, default: Date.now },
 });
 const Booking = mongoose.model('Booking', bookingSchema);
@@ -418,7 +422,10 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                 const creatorEmail = creator ? creator.email : null;
                 const creatorHandle = creator ? creator.handle : '';
 
-                // 2. Create a Daily.co video room
+                // 2. Generate a 4-digit session PIN
+                const sessionPin = String(Math.floor(1000 + Math.random() * 9000));
+
+                // 3. Create a Daily.co video room
                 let roomUrl = null;
                 let roomId = null;
                 if (process.env.DAILY_API_KEY) {
@@ -432,20 +439,21 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                     }
                 }
                 const roomLink = roomUrl
-                    ? `${frontendUrl}/room?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}`
+                    ? `${frontendUrl}/room.html?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}&pin=${sessionPin}&booking=${bookingId}`
                     : null;
 
-                // 3. Update the Booking record if bookingId is present
+                // 4. Update the Booking record if bookingId is present
                 if (bookingId) {
                     try {
                         const booking = await Booking.findById(bookingId);
                         if (booking) {
                             booking.status = 'paid';
                             booking.paymentIntentId = paymentIntentId;
+                            booking.sessionPin = sessionPin;
                             if (roomId) booking.roomId = roomId;
                             if (roomUrl) booking.roomUrl = roomUrl;
                             await booking.save();
-                            console.log(`📋 Booking ${bookingId} marked as paid.`);
+                            console.log(`📋 Booking ${bookingId} marked as paid. PIN: ${sessionPin}`);
                         }
                     } catch (e) {
                         console.error('Failed to update booking record:', e.message);
@@ -461,8 +469,11 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                 });
                 sendEmail(adminEmail, `💰 Payment Received: $${(session.amount_total/100).toFixed(2)} from ${fanName}`, adminHtml3).catch(e => console.error(e));
 
-                // 4. Email the creator
+                // 4. Email the creator (with income receipt)
                 if (creatorEmail) {
+                    const grossAmount = session.amount_total || 0;
+                    const platformFee = Math.round(grossAmount * 0.15);
+                    const creatorPayout = grossAmount - platformFee;
                     const creatorHtml = emailTemplate({
                         title: `🎯 Session Confirmed — ${sessionLabel}`,
                         preheader: `${fanName} has paid — your session room is ready`,
@@ -472,13 +483,27 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                                 <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Fan</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;font-weight:700;">${fanName}</td></tr>
                                 <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel} (${sessionMinutes} min)</td></tr>
                                 <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
-                                <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
-                            </table>`,
+                                <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
+                            </table>
+                            <div style="margin:20px 0;padding:16px;background:rgba(80,200,120,0.07);border:1px solid rgba(80,200,120,0.3);border-radius:10px;">
+                                <p style="margin:0 0 10px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Income Receipt</p>
+                                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                                    <tr><td style="padding:6px 0;color:#9A8A72;font-size:13px;">Session Price</td><td style="padding:6px 0;color:#FDF6EC;text-align:right;">$${(grossAmount/100).toFixed(2)}</td></tr>
+                                    <tr><td style="padding:6px 0;color:#9A8A72;font-size:13px;">Platform Fee (15%)</td><td style="padding:6px 0;color:#FF9999;text-align:right;">-$${(platformFee/100).toFixed(2)}</td></tr>
+                                    <tr style="border-top:1px solid rgba(80,200,120,0.3);"><td style="padding:8px 0 0;color:#50C878;font-size:14px;font-weight:700;">Your Payout (85%)</td><td style="padding:8px 0 0;color:#50C878;font-size:16px;font-weight:900;text-align:right;">$${(creatorPayout/100).toFixed(2)}</td></tr>
+                                </table>
+                                <p style="margin:8px 0 0;font-size:11px;color:#666;">Payout will be deposited to your connected Stripe account. Keep this email for your tax records.</p>
+                            </div>
+                            <div style="margin:20px 0;padding:16px;background:rgba(212,165,116,0.1);border:2px solid #D4A574;border-radius:10px;text-align:center;">
+                                <p style="margin:0 0 6px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Your Session PIN</p>
+                                <p style="margin:0;font-size:36px;font-weight:900;color:#D4A574;letter-spacing:8px;">${sessionPin}</p>
+                                <p style="margin:6px 0 0 0;font-size:12px;color:#9A8A72;">Enter this PIN when you join the session room. Your PIN has also been sent to your dashboard.</p>
+                            </div>`,
                         ctaUrl: roomLink || `${frontendUrl}/dashboard`,
                         ctaText: roomLink ? '▶ Start Session Now' : '📊 Go to Dashboard',
-                        footerNote: 'Log into your creator dashboard to manage this booking.'
+                        footerNote: 'Log into your creator dashboard to manage this booking. Keep this email for your tax records.'
                     });
-                    await sendEmail(creatorEmail, `🎯 ${fanName} paid for their ${sessionLabel}`, creatorHtml);
+                    await sendEmail(creatorEmail, `💰 Income Receipt: $${(creatorPayout/100).toFixed(2)} from ${fanName}'s ${sessionLabel}`, creatorHtml);
                 }
 
                 // 5. Email the fan
@@ -493,7 +518,12 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                                 <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Creator</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${creatorName}</td></tr>
                                 <tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr>
                                 <tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr>
-                            </table>`,
+                            </table>
+                            <div style="margin:20px 0;padding:16px;background:rgba(212,165,116,0.1);border:2px solid #D4A574;border-radius:10px;text-align:center;">
+                                <p style="margin:0 0 6px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Your Session PIN</p>
+                                <p style="margin:0;font-size:36px;font-weight:900;color:#D4A574;letter-spacing:8px;">${sessionPin}</p>
+                                <p style="margin:6px 0 0 0;font-size:12px;color:#9A8A72;">You'll need this PIN to enter the session room. Keep it safe — it's also saved in your dashboard.</p>
+                            </div>`,
                         ctaUrl: roomLink || `${frontendUrl}/fan-dashboard.html`,
                         ctaText: roomLink ? '▶ Join Your Session' : '📊 Go to Your Dashboard',
                         footerNote: 'Questions? Reply to this email or visit truthordareformyfans.com'
@@ -506,6 +536,25 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
                 console.error('Post-payment fulfillment error:', err.message);
             }
         })();
+    }
+    // Handle extension payment
+    if (event.type === 'checkout.session.completed') {
+        const session2 = event.data.object;
+        if (session2.metadata?.action === 'extend') {
+            (async () => {
+                try {
+                    const { bookingId, extensionType } = session2.metadata;
+                    const addMinutes = extensionType === 'dare' ? 15 : 5;
+                    await Booking.findByIdAndUpdate(bookingId, {
+                        extensionStatus: 'extended',
+                        extensionPending: null
+                    });
+                    console.log(`⏱ Extension paid for booking ${bookingId}: +${addMinutes} min (${extensionType})`);
+                } catch (e) {
+                    console.error('Extension webhook error:', e.message);
+                }
+            })();
+        }
     }
     // Return a 200 response to acknowledge receipt of the event
     res.json({ received: true });
@@ -739,16 +788,26 @@ app.get('/creator/earnings', requireAuth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
-        const sessions = await Booking.find({ creatorEmail: user.email, status: { $in: ['confirmed', 'accepted'] } });
+        const sessions = await Booking.find({ creatorEmail: user.email, status: { $in: ['confirmed', 'paid', 'accepted'] } }).sort({ createdAt: -1 });
         const PRICES = { truth: 1500, dare: 4500 };
         const totalGross = sessions.reduce((sum, s) => sum + (PRICES[s.sessionType] || 0), 0);
         const totalEarnings = Math.round(totalGross * 0.85); // 85% to creator
+        const sessionBreakdown = sessions.map(s => ({
+            id: s._id,
+            fanName: s.fanName,
+            sessionType: s.sessionType,
+            gross: (PRICES[s.sessionType] || 0) / 100,
+            payout: Math.round((PRICES[s.sessionType] || 0) * 0.85) / 100,
+            date: s.updatedAt || s.createdAt,
+            status: s.status,
+        }));
         res.json({
             totalSessions: sessions.length,
             totalGrossUSD: (totalGross / 100).toFixed(2),
             totalEarningsUSD: (totalEarnings / 100).toFixed(2),
             stripeConnected: !!user.stripeAccountId,
             stripeAccountId: user.stripeAccountId || null,
+            sessions: sessionBreakdown,
         });
     } catch (err) {
         console.error('Failed to fetch creator earnings:', err);
@@ -1190,6 +1249,89 @@ app.post('/booking/:id/refuse-challenge', requireAuth, async (req, res) => {
     } catch (err) {
         console.error('Refuse challenge failed:', err);
         res.status(500).json({ error: 'Could not process refusal.' });
+    }
+});
+
+// POST /booking/:id/verify-pin — verify the session PIN
+app.post('/booking/:id/verify-pin', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ valid: false, error: 'Booking not found' });
+        if (!booking.sessionPin) return res.json({ valid: true }); // No PIN set — allow entry
+        const { pin } = req.body;
+        if (String(booking.sessionPin) === String(pin)) {
+            res.json({ valid: true });
+        } else {
+            res.json({ valid: false });
+        }
+    } catch (err) {
+        res.status(500).json({ valid: false, error: 'Server error' });
+    }
+});
+
+// POST /booking/:id/request-extension — fan requests session extension
+app.post('/booking/:id/request-extension', async (req, res) => {
+    try {
+        const { extensionType } = req.body;
+        await Booking.findByIdAndUpdate(req.params.id, {
+            extensionPending: extensionType || 'truth',
+            extensionStatus: 'requested'
+        });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// POST /booking/:id/respond-extension — creator accepts or declines extension
+app.post('/booking/:id/respond-extension', requireAuth, async (req, res) => {
+    try {
+        const { accepted } = req.body;
+        await Booking.findByIdAndUpdate(req.params.id, {
+            extensionStatus: accepted ? 'accepted' : 'declined'
+        });
+        res.json({ success: true, status: accepted ? 'accepted' : 'declined' });
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// GET /booking/:id/extension-status — poll for extension status
+app.get('/booking/:id/extension-status', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id).select('extensionStatus extensionPending');
+        if (!booking) return res.status(404).json({ error: 'Booking not found' });
+        res.json({
+            status: booking.extensionStatus || 'none',
+            extensionType: booking.extensionPending || 'truth'
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// POST /booking/:id/extend-checkout — Stripe checkout for session extension
+app.post('/booking/:id/extend-checkout', requireAuth, async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found' });
+        const { extensionType } = req.body;
+        const isDare = extensionType === 'dare';
+        const amount = isDare ? 4500 : 1500;
+        const label = isDare ? 'Dare Session Extension (+15 min)' : 'Truth Session Extension (+5 min)';
+        const roomUrl = `${FRONTEND}/room.html?id=${booking.roomId}&booking=${booking._id}&type=${extensionType}&extended=1`;
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [{ price_data: { currency: 'usd', product_data: { name: label }, unit_amount: amount }, quantity: 1 }],
+            mode: 'payment',
+            success_url: roomUrl + '&ext_success=1',
+            cancel_url: roomUrl,
+            metadata: { bookingId: booking._id.toString(), extensionType, action: 'extend' },
+        });
+        res.json({ url: session.url });
+    } catch (err) {
+        console.error('Extension checkout error:', err);
+        res.status(500).json({ error: 'Could not create extension checkout' });
     }
 });
 
