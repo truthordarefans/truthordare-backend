@@ -948,7 +948,13 @@ app.get('/creator/earnings', requireAuth, async (req, res) => {
 
 // POST /booking — fan submits a booking REQUEST (no payment yet)
 app.post('/booking', async (req, res) => {
-    const { fanName, fanEmail, creatorHandle, sessionType, requestedDate, requestedTime, note } = req.body;
+    let { fanName, fanEmail, creatorHandle, sessionType, requestedDate, requestedTime, note } = req.body;
+    // Handle "Now / Immediately" slot — convert to actual current date/time
+    if (requestedDate === 'now' || requestedTime === 'now') {
+        const now = new Date();
+        requestedDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+        requestedTime = now.toTimeString().slice(0, 5);  // HH:MM
+    }
     if (!fanName || !fanEmail || !creatorHandle || !sessionType || !requestedDate || !requestedTime) {
         return res.status(400).json({ error: 'Missing required booking fields.' });
     }
