@@ -143,6 +143,7 @@ const bookingSchema = new mongoose.Schema({
     extensionPending: { type: String, default: null }, // 'truth' or 'dare' if fan requested extension
     extensionStatus: { type: String, default: null }, // 'requested', 'accepted', 'declined', 'extended'
     extensionType: { type: String, default: null }, // 'truth' or 'dare' for the extension
+    fanInRoom:   { type: Boolean, default: false }, // true when fan has entered the session room
     createdAt:   { type: Date, default: Date.now },
 });
 const Booking = mongoose.model('Booking', bookingSchema);
@@ -768,6 +769,72 @@ app.delete('/creator/push-subscribe', requireAuth, async (req, res) => {
         await user.save();
         res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: 'Could not remove subscription.' }); }
+});
+
+// POST /booking/:id/fan-in-room — fan signals they've entered the room; notifies creator
+app.post('/booking/:id/fan-in-room', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        booking.fanInRoom = true;
+        await booking.save();
+
+        // Find creator and send push notification
+        const creator = await User.findOne({ email: booking.creatorEmail, role: 'creator' });
+        if (creator && creator.pushSubscription) {
+            const sessionLabel = booking.sessionType === 'truth' ? 'Truth Session' : 'Dare Session';
+            const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+            const roomLink = booking.roomId
+                ? `${frontendUrl}/room.html?id=${booking.roomId}&creator=${encodeURIComponent(creator.handle || creator.name)}&type=${booking.sessionType}&pin=${booking.sessionPin}&booking=${booking._id}`
+                : `${frontendUrl}/dashboard`;
+            try {
+                await webpush.sendNotification(
+                    creator.pushSubscription,
+                    JSON.stringify({
+                        title: '🔴 Fan is waiting in the room!',
+                        body: `${booking.fanName} has joined the ${sessionLabel} — join now!`,
+                        url: roomLink
+                    })
+                );
+            } catch (e) { console.warn('Push to creator failed:', e.message); }
+        }
+
+        // Also send email to creator
+        if (creator) {
+            const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+            const roomLink = booking.roomId
+                ? `${frontendUrl}/room.html?id=${booking.roomId}&creator=${encodeURIComponent(creator.handle || creator.name)}&type=${booking.sessionType}&pin=${booking.sessionPin}&booking=${booking._id}`
+                : `${frontendUrl}/dashboard`;
+            const sessionLabel = booking.sessionType === 'truth' ? 'Truth Session' : 'Dare Session';
+            const bodyHtml = `
+                <p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;"><strong style="color:#FDF6EC;">${booking.fanName}</strong> is in the session room and waiting for you!</p>
+                <table width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,50,50,0.1);border:1px solid rgba(255,80,80,0.4);border-radius:8px;padding:16px;margin-bottom:20px;"><tr><td>
+                    <p style="margin:0;font-size:14px;color:#FDF6EC;">🔴 <strong>${sessionLabel}</strong> — fan is waiting now</p>
+                    <p style="margin:6px 0 0 0;font-size:13px;color:#C9B99A;">Join the room immediately to start the session.</p>
+                </td></tr></table>`;
+            try {
+                await sendEmail(
+                    creator.email,
+                    `🔴 ${booking.fanName} is waiting in the room — join now!`,
+                    emailTemplate({ title: '🔴 Fan Is Waiting!', preheader: `${booking.fanName} is in the session room`, bodyHtml, ctaUrl: roomLink, ctaText: '▶ Join Session Now' })
+                );
+            } catch (e) { console.warn('Email to creator failed:', e.message); }
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('fan-in-room error:', err);
+        res.status(500).json({ error: 'Could not update fan-in-room status.' });
+    }
+});
+
+// GET /booking/:id/status — returns fanInRoom and other status fields (polled by creator dashboard)
+app.get('/booking/:id/status', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id, 'fanInRoom status roomId roomUrl sessionPin sessionType fanName');
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        res.json(booking);
+    } catch (err) { res.status(500).json({ error: 'Could not fetch booking status.' }); }
 });
 
 // Auto-offline: every 2 minutes, mark creators offline if no heartbeat in 5 minutes
