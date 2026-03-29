@@ -1529,6 +1529,16 @@ app.delete('/admin/creator/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// DELETE /admin/booking/:id — remove a booking
+app.delete('/admin/booking/:id', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const booking = await Booking.findByIdAndDelete(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found' });
+        res.json({ success: true, deleted: booking._id });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // PUT /admin/creator/:id/feature — approve or remove from featured
 app.put('/admin/creator/:id/feature', async (req, res) => {
     if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
