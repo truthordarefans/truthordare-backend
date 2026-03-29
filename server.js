@@ -278,7 +278,7 @@ app.post('/admin-delete-bookings', async (req, res) => {
 });
 
 app.post('/create-checkout-session', async (req, res) => {
-    const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note } = req.body;
+    const { selectedCard, creatorName, fanName, creatorStripeAccountId, fanEmail, bookingDate, bookingTime, note, successUrl, cancelUrl } = req.body;
     if (!selectedCard || !creatorName || !fanName) return res.status(400).json({ error: 'Missing fields.' });
     const PRICES = {
         truth: { amount: 1500, label: 'Truth Session' },
@@ -287,6 +287,10 @@ app.post('/create-checkout-session', async (req, res) => {
     const price = PRICES[selectedCard];
     if (!price) return res.status(400).json({ error: 'Invalid card.' });
     try {
+        // Use caller-supplied URLs when provided (e.g. live session returns to creator profile to open room)
+        // Fall back to generic booking-confirmed page
+        const resolvedSuccessUrl = successUrl || `${FRONTEND}/booking-confirmed.html?session_id={CHECKOUT_SESSION_ID}`;
+        const resolvedCancelUrl  = cancelUrl  || `${FRONTEND}?canceled=1`;
         const sessionParams = {
             payment_method_types: ['card'],
             line_items: [{
@@ -301,8 +305,8 @@ app.post('/create-checkout-session', async (req, res) => {
                 quantity: 1
             }],
             mode: 'payment',
-            success_url: `${FRONTEND}/booking-confirmed.html?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${FRONTEND}?canceled=1`,
+            success_url: resolvedSuccessUrl,
+            cancel_url: resolvedCancelUrl,
             metadata: { creator: creatorName, fan: fanName, type: selectedCard, bookingDate: bookingDate || '', bookingTime: bookingTime || '', note: note || '' },
         };
         if (creatorStripeAccountId) {
