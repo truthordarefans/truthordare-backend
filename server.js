@@ -57,6 +57,19 @@ const BACKEND = process.env.BACKEND_URL || 'https://truthordare-backend.onrender
 const FRONTEND = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
 
 app.use(cors({ origin: '*' }));
+
+// CRITICAL: Stripe webhook requires raw body for signature verification.
+// Must be registered BEFORE express.json() middleware.
+app.use((req, res, next) => {
+    if (req.originalUrl === '/webhook') {
+        let rawData = Buffer.alloc(0);
+        req.on('data', chunk => { rawData = Buffer.concat([rawData, chunk]); });
+        req.on('end', () => { req.rawBody = rawData; next(); });
+    } else {
+        next();
+    }
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 mongoose.connect(process.env.MONGODB_URI)
@@ -131,7 +144,7 @@ const bookingSchema = new mongoose.Schema({
     counterProposals: { type: Array, default: [] }, // [{date, time}, {date, time}, {date, time}]
     fanChosenDate: { type: String, default: null },
     fanChosenTime: { type: String, default: null },
-    status:      { type: String, enum: ['pending', 'accepted', 'declined', 'proposed', 'confirmed', 'expired', 'refused'], default: 'pending' },
+    status:      { type: String, enum: ['pending', 'accepted', 'declined', 'proposed', 'confirmed', 'expired', 'refused', 'paid'], default: 'pending' },
     requestedTime: { type: String, default: null },
     note:        { type: String, default: null },
     paymentIntentId: { type: String, default: null },
@@ -401,11 +414,12 @@ app.get('/stripe-account-status', requireAuth, async (req, res) => {
     }
 });
 
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhook', (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
     try {
-        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+        const payload = req.rawBody || req.body;
+        event = stripe.webhooks.constructEvent(payload, sig, process.env.STRIPE_WEBHOOK_SECRET);
     }
     catch (err) {
         console.error('Stripe webhook error:', err.message);
@@ -826,6 +840,29 @@ app.post('/booking/:id/fan-in-room', async (req, res) => {
         console.error('fan-in-room error:', err);
         res.status(500).json({ error: 'Could not update fan-in-room status.' });
     }
+});
+
+// GET /booking/:id/confirm-payment — called by booking-confirmed.html to verify payment actually happened
+app.get('/booking/:id/confirm-payment', async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        // If already paid (webhook already fired), return success immediately
+        if (booking.status === 'paid' || booking.paymentIntentId) {
+            return res.json({
+                paid: true,
+                status: booking.status,
+                sessionPin: booking.sessionPin,
+                roomId: booking.roomId,
+                roomUrl: booking.roomUrl,
+                sessionType: booking.sessionType,
+                creatorName: booking.creatorName,
+                fanName: booking.fanName,
+            });
+        }
+        // Not yet paid - return pending
+        return res.json({ paid: false, status: booking.status });
+    } catch (err) { res.status(500).json({ error: 'Could not verify payment.' }); }
 });
 
 // GET /booking/:id/status — returns fanInRoom and other status fields (polled by creator dashboard)
