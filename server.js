@@ -1716,6 +1716,19 @@ app.delete('/admin/creator/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PUT /admin/booking/:id/status — reset booking status (admin only)
+app.put('/admin/booking/:id/status', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const { status, token } = req.body;
+        const update = { status };
+        if (token !== undefined) update.token = token;
+        const booking = await Booking.findByIdAndUpdate(req.params.id, update, { new: true });
+        if (!booking) return res.status(404).json({ error: 'Booking not found' });
+        res.json({ success: true, booking: { _id: booking._id, status: booking.status, token: booking.token } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // DELETE /admin/booking/:id — remove a booking
 app.delete('/admin/booking/:id', async (req, res) => {
     if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
