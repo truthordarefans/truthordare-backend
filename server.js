@@ -7,6 +7,12 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 const { Resend } = require('resend');
+const webpush = require('web-push');
+
+// VAPID keys for web push notifications
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDaI55PcBNta6coNS1Rlvac0iu44b6KELPL75g4e2lymrrfGhWpNsTnIPDgT1ILWejua0uCmU1dwQXw4rU9Xt6I';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'QdPkUQyiD9unt9ZC6AxwKkekrY0sq_Pgv3gHnzl0UAY';
+webpush.setVapidDetails('mailto:truthordarefans@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendEmail(to, subject, html) {
@@ -89,6 +95,8 @@ const userSchema = new mongoose.Schema({
     createdAt:   { type: Date, default: Date.now },
     resetToken:  { type: String, default: null },
     resetTokenExpiry: { type: Date, default: null },
+    lastHeartbeat: { type: Date, default: null },   // for auto-offline detection
+    pushSubscription: { type: mongoose.Schema.Types.Mixed, default: null }, // web push subscription object
 });
 const User = mongoose.model('User', userSchema);
 
@@ -724,6 +732,58 @@ app.put('/creator/session-status', requireAuth, async (req, res) => {
     }
 });
 
+// POST /creator/heartbeat — dashboard pings every 60s to stay online
+app.post('/creator/heartbeat', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.lastHeartbeat = new Date();
+        await user.save();
+        res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: 'Heartbeat failed.' }); }
+});
+
+// GET /vapid-public-key — returns the VAPID public key for push subscription
+app.get('/vapid-public-key', (req, res) => {
+    res.json({ publicKey: VAPID_PUBLIC });
+});
+
+// POST /creator/push-subscribe — save push subscription for creator
+app.post('/creator/push-subscribe', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.pushSubscription = req.body.subscription;
+        await user.save();
+        res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: 'Could not save subscription.' }); }
+});
+
+// DELETE /creator/push-subscribe — remove push subscription (unsubscribe)
+app.delete('/creator/push-subscribe', requireAuth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
+        user.pushSubscription = null;
+        await user.save();
+        res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: 'Could not remove subscription.' }); }
+});
+
+// Auto-offline: every 2 minutes, mark creators offline if no heartbeat in 5 minutes
+setInterval(async () => {
+    try {
+        const cutoff = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+        const result = await User.updateMany(
+            { role: 'creator', isLive: true, lastHeartbeat: { $lt: cutoff } },
+            { $set: { isLive: false } }
+        );
+        if (result.modifiedCount > 0) {
+            console.log(`⚫ Auto-offline: marked ${result.modifiedCount} creator(s) offline (no heartbeat)`);
+        }
+    } catch (err) { console.error('Auto-offline check failed:', err.message); }
+}, 2 * 60 * 1000); // run every 2 minutes
+
 // POST /creator/feature-request — request to be featured on homepage
 app.post('/creator/feature-request', requireAuth, async (req, res) => {
     try {
@@ -889,6 +949,23 @@ app.post('/booking', async (req, res) => {
         });
         sendEmail(fanEmail, `📨 Booking request sent to ${creator.name}`, fanHtml)
             .catch(e => console.error('Fan email failed:', e.message));
+
+        // Send browser push notification to creator if subscribed
+        if (creator.pushSubscription) {
+            const pushPayload = JSON.stringify({
+                title: '🔔 New Booking Request!',
+                body: `${fanName} wants a ${sessionLabel} on ${requestedDate} at ${requestedTime}`,
+                url: '/dashboard.html'
+            });
+            webpush.sendNotification(creator.pushSubscription, pushPayload)
+                .catch(err => {
+                    console.error('Push notification failed:', err.message);
+                    // If subscription is expired/invalid, clear it
+                    if (err.statusCode === 410 || err.statusCode === 404) {
+                        User.findByIdAndUpdate(creator._id, { pushSubscription: null }).catch(() => {});
+                    }
+                });
+        }
 
         res.status(201).json({ success: true, bookingId: booking._id });
     } catch (err) {
