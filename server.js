@@ -1832,6 +1832,23 @@ app.post('/admin/delete-user', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Admin: force-set user role bypassing Mongoose schema validation
+app.post('/admin/fix-role', async (req, res) => {
+    const { secret, email, role } = req.body;
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    if (!email || !role) return res.status(400).json({ error: 'email and role required' });
+    try {
+        const result = await mongoose.connection.db.collection('users').findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { $set: { role } },
+            { returnDocument: 'after' }
+        );
+        const user = result.value || result;
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, name: user.name, email: user.email, role: user.role });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
