@@ -463,6 +463,9 @@ app.post('/webhook', (req, res) => {
                         console.error('Daily.co room creation failed:', e.message);
                     }
                 }
+                const fanRoomLink = roomUrl && bookingRecord && bookingRecord.token
+                    ? `${frontendUrl}/room.html?booking=${bookingId}&token=${encodeURIComponent(bookingRecord.token)}`
+                    : null;
                 const roomLink = roomUrl
                     ? `${frontendUrl}/room.html?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}&pin=${sessionPin}&booking=${bookingId}`
                     : null;
@@ -646,6 +649,47 @@ app.get('/get-room/:roomId', requireAuth, async (req, res) => {
     } catch (err) {
         console.error('Failed to fetch Daily.co room:', err);
         res.status(500).json({ error: 'Could not fetch room.' });
+    }
+});
+
+// GET /fan-room/:bookingId?token=... — public token-gated room access for fans (no login required)
+app.get('/fan-room/:bookingId', async (req, res) => {
+    if (!process.env.DAILY_API_KEY) return res.status(500).json({ error: 'Daily.co not configured.' });
+    const { token } = req.query;
+    if (!token) return res.status(400).json({ error: 'Token required.' });
+    try {
+        const booking = await Booking.findById(req.params.bookingId);
+        if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+        if (booking.token !== token) return res.status(403).json({ error: 'Invalid token.' });
+        if (booking.status !== 'paid' && booking.status !== 'confirmed') return res.status(403).json({ error: 'Booking not paid.' });
+        if (!booking.roomId) return res.status(404).json({ error: 'Room not ready yet.' });
+        res.json({
+            url: booking.roomUrl,
+            roomId: booking.roomId,
+            sessionPin: booking.sessionPin,
+            sessionType: booking.sessionType,
+            creatorName: booking.creatorName,
+            fanName: booking.fanName,
+            requestedDate: booking.requestedDate,
+            requestedTime: booking.requestedTime
+        });
+    } catch (err) {
+        console.error('Failed to fetch fan room:', err);
+        res.status(500).json({ error: 'Could not fetch room.' });
+    }
+});
+
+// POST /fan-room-chat/:roomId — public chat post for fans (token-gated)
+app.post('/fan-room-chat/:roomId', async (req, res) => {
+    const { message, name, token, bookingId } = req.body;
+    if (!message || !token || !bookingId) return res.status(400).json({ error: 'Missing fields.' });
+    try {
+        const booking = await Booking.findById(bookingId);
+        if (!booking || booking.token !== token) return res.status(403).json({ error: 'Invalid token.' });
+        await ChatMessage.create({ roomId: req.params.roomId, name: name || booking.fanName, role: 'fan', message });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not save.' });
     }
 });
 
@@ -1884,6 +1928,9 @@ app.post('/admin/booking/:id/fulfill', async (req, res) => {
         const roomLink = roomUrl
             ? `${frontendUrl}/room.html?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}&pin=${sessionPin}&booking=${booking._id}`
             : null;
+        const fanRoomLink = roomUrl && booking.token
+            ? `${frontendUrl}/room.html?booking=${booking._id}&token=${encodeURIComponent(booking.token)}`
+            : roomLink;
         // Update booking
         booking.sessionPin = sessionPin;
         if (roomId) booking.roomId = roomId;
@@ -1909,8 +1956,8 @@ app.post('/admin/booking/:id/fulfill', async (req, res) => {
                 title: '✅ You\'re All Set!',
                 preheader: `Your ${sessionLabel} with ${creatorName} is confirmed and paid`,
                 bodyHtml: `<p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid!</p><table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel}</td></tr><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Creator</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${creatorName}</td></tr><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr><tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr></table><div style="margin:20px 0;padding:16px;background:rgba(212,165,116,0.1);border:2px solid #D4A574;border-radius:10px;text-align:center;"><p style="margin:0 0 6px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Your Session PIN</p><p style="margin:0;font-size:36px;font-weight:900;color:#D4A574;letter-spacing:8px;">${sessionPin}</p><p style="margin:6px 0 0 0;font-size:12px;color:#9A8A72;">Enter this PIN when joining the session room.</p></div>`,
-                ctaUrl: roomLink || `${frontendUrl}/fan-dashboard.html`,
-                ctaText: roomLink ? '▶ Join Your Session' : '📊 Go to Your Dashboard',
+                ctaUrl: fanRoomLink || `${frontendUrl}/fan-dashboard.html`,
+                ctaText: fanRoomLink ? '▶ Join Your Session' : '📊 Go to Your Dashboard',
                 footerNote: 'Questions? Visit truthordareformyfans.com'
             });
             await sendEmail(fanEmail, `✅ Your ${sessionLabel} with ${creatorName} is confirmed`, fanHtml);
