@@ -812,6 +812,7 @@ app.post('/creator/heartbeat', requireAuth, async (req, res) => {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
         user.lastHeartbeat = new Date();
+        user.isLive = true; // Heartbeat confirms creator is actively on dashboard
         await user.save();
         res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: 'Heartbeat failed.' }); }
@@ -939,7 +940,7 @@ setInterval(async () => {
         const cutoff = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
         const result = await User.updateMany(
             { role: 'creator', isLive: true, lastHeartbeat: { $lt: cutoff } },
-            { $set: { isLive: false } }
+            { $set: { isLive: false, inSession: false } } // Clear both flags when creator goes offline
         );
         if (result.modifiedCount > 0) {
             console.log(`⚫ Auto-offline: marked ${result.modifiedCount} creator(s) offline (no heartbeat)`);
