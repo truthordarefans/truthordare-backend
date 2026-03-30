@@ -177,6 +177,7 @@ const platformFee = (amount) => Math.round(amount * 0.15); // 15% platform fee
 // Daily.co API for video rooms
 const createDailyRoom = async (sessionType) => {
     const roomDuration = sessionType === 'truth' ? 5 : 15; // 5 min for truth, 15 min for dare
+    const roomExpiry = Math.round(Date.now() / 1000) + (24 * 60 * 60); // Room available for 24 hours
     const response = await fetch('https://api.daily.co/v1/rooms', {
         method: 'POST',
         headers: {
@@ -191,7 +192,8 @@ const createDailyRoom = async (sessionType) => {
                 enable_chat: true,
                 start_video_off: true,
                 start_audio_off: false,
-                exp: Math.round(Date.now() / 1000) + (roomDuration * 60), // Room expires after duration
+                exp: roomExpiry, // Room available for 24 hours from creation
+                eject_at_token_exp: false,
             },
         }),
     });
@@ -1250,7 +1252,7 @@ app.get('/creator/bookings', requireAuth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'creator') return res.status(403).json({ error: 'Creator only.' });
-        const bookings = await Booking.find({ creatorEmail: user.email, status: { $in: ['pending', 'accepted', 'confirmed', 'proposed'] } }).sort({ createdAt: -1 });
+        const bookings = await Booking.find({ creatorEmail: user.email, status: { $in: ['pending', 'accepted', 'confirmed', 'proposed', 'paid'] } }).sort({ createdAt: -1 });
         res.json({ bookings });
     } catch (err) {
         console.error('Failed to fetch bookings:', err);
