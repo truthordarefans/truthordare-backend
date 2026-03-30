@@ -1849,6 +1849,74 @@ app.post('/admin/fix-role', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /admin/booking/:id/fulfill — manually trigger post-payment fulfillment (generate PIN, create room, send emails)
+app.post('/admin/booking/:id/fulfill', async (req, res) => {
+    if (req.headers['x-admin-secret'] !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ error: 'Booking not found' });
+        const frontendUrl = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
+        const sessionType = booking.sessionType;
+        const sessionLabel = sessionType === 'truth' ? 'Truth Session ($15)' : 'Dare Session ($45)';
+        const fanName = booking.fanName;
+        const fanEmail = booking.fanEmail;
+        const bookingDate = booking.fanChosenDate || booking.proposedDate || booking.requestedDate || '';
+        const bookingTime = booking.fanChosenTime || booking.proposedTime || booking.requestedTime || '';
+        // Find creator
+        const creator = await User.findOne({ email: booking.creatorEmail });
+        const creatorName = creator ? creator.name : booking.creatorName;
+        const creatorEmail = booking.creatorEmail;
+        const creatorHandle = creator ? creator.handle : '';
+        // Generate PIN
+        const sessionPin = String(Math.floor(1000 + Math.random() * 9000));
+        // Create Daily.co room
+        let roomUrl = null;
+        let roomId = null;
+        if (process.env.DAILY_API_KEY) {
+            try {
+                const room = await createDailyRoom(sessionType);
+                roomUrl = room.url;
+                roomId = room.name;
+            } catch (e) { console.error('Daily room error:', e.message); }
+        }
+        const roomLink = roomUrl
+            ? `${frontendUrl}/room.html?id=${roomId}&creator=${encodeURIComponent(creatorHandle)}&type=${sessionType}&pin=${sessionPin}&booking=${booking._id}`
+            : null;
+        // Update booking
+        booking.sessionPin = sessionPin;
+        if (roomId) booking.roomId = roomId;
+        if (roomUrl) booking.roomUrl = roomUrl;
+        booking.status = 'paid';
+        await booking.save();
+        // Send email to creator
+        if (creatorEmail) {
+            const creatorPayout = sessionType === 'truth' ? 1275 : 3825;
+            const creatorHtml = emailTemplate({
+                title: `💰 Payment Received!`,
+                preheader: `${fanName} paid for a ${sessionLabel} — session confirmed`,
+                bodyHtml: `<p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;"><strong style="color:#FDF6EC;">${fanName}</strong> has paid for a <strong style="color:#D4A574;">${sessionLabel}</strong>. Your payout: <strong style="color:#22c55e;">$${(creatorPayout/100).toFixed(2)}</strong></p><table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Fan</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${fanName}</td></tr><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr><tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr></table><div style="margin:20px 0;padding:16px;background:rgba(212,165,116,0.1);border:2px solid #D4A574;border-radius:10px;text-align:center;"><p style="margin:0 0 6px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Session PIN</p><p style="margin:0;font-size:36px;font-weight:900;color:#D4A574;letter-spacing:8px;">${sessionPin}</p></div>`,
+                ctaUrl: roomLink || `${frontendUrl}/creator-dashboard.html`,
+                ctaText: roomLink ? '▶ Start Session Now' : '📊 Go to Dashboard',
+                footerNote: 'Log into your creator dashboard to manage this booking.'
+            });
+            await sendEmail(creatorEmail, `💰 ${fanName} paid for ${sessionLabel} — session confirmed`, creatorHtml);
+        }
+        // Send email to fan
+        if (fanEmail) {
+            const fanHtml = emailTemplate({
+                title: '✅ You\'re All Set!',
+                preheader: `Your ${sessionLabel} with ${creatorName} is confirmed and paid`,
+                bodyHtml: `<p style="font-size:15px;color:#C9B99A;margin:0 0 20px 0;">Your <strong style="color:#FDF6EC;">${sessionLabel}</strong> with <strong style="color:#FDF6EC;">${creatorName}</strong> is booked and paid!</p><table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:8px;"><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;width:40%;">Session</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#D4A574;font-weight:700;">${sessionLabel}</td></tr><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Creator</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${creatorName}</td></tr><tr><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#9A8A72;font-size:13px;">Date</td><td style="padding:9px 0;border-bottom:1px solid rgba(212,165,116,0.1);color:#FDF6EC;">${bookingDate || 'Flexible'}</td></tr><tr><td style="padding:9px 0;color:#9A8A72;font-size:13px;">Time</td><td style="padding:9px 0;color:#FDF6EC;">${bookingTime || 'Flexible'}</td></tr></table><div style="margin:20px 0;padding:16px;background:rgba(212,165,116,0.1);border:2px solid #D4A574;border-radius:10px;text-align:center;"><p style="margin:0 0 6px 0;font-size:12px;color:#9A8A72;letter-spacing:1px;text-transform:uppercase;">Your Session PIN</p><p style="margin:0;font-size:36px;font-weight:900;color:#D4A574;letter-spacing:8px;">${sessionPin}</p><p style="margin:6px 0 0 0;font-size:12px;color:#9A8A72;">Enter this PIN when joining the session room.</p></div>`,
+                ctaUrl: roomLink || `${frontendUrl}/fan-dashboard.html`,
+                ctaText: roomLink ? '▶ Join Your Session' : '📊 Go to Your Dashboard',
+                footerNote: 'Questions? Visit truthordareformyfans.com'
+            });
+            await sendEmail(fanEmail, `✅ Your ${sessionLabel} with ${creatorName} is confirmed`, fanHtml);
+        }
+        res.json({ success: true, sessionPin, roomUrl, roomId, message: 'Fulfillment complete — emails sent' });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/', (req, res) => res.send('truthordareformyfans.com backend ✓'));
 
 app.listen(PORT, () => {
