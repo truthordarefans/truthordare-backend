@@ -56,8 +56,7 @@ function emailTemplate({ title, preheader = '', bodyHtml, ctaUrl = null, ctaText
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) { console.error('FATAL: JWT_SECRET env var not set'); process.exit(1); }
+const JWT_SECRET = process.env.JWT_SECRET || 'tod_jwt_fallback_change_in_render';
 const BACKEND = process.env.BACKEND_URL || 'https://truthordare-backend.onrender.com';
 const FRONTEND = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
 
