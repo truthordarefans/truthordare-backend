@@ -11,7 +11,7 @@ const webpush = require('web-push');
 
 // VAPID keys for web push notifications
 const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDaI55PcBNta6coNS1Rlvac0iu44b6KELPL75g4e2lymrrfGhWpNsTnIPDgT1ILWejua0uCmU1dwQXw4rU9Xt6I';
-const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || 'QdPkUQyiD9unt9ZC6AxwKkekrY0sq_Pgv3gHnzl0UAY';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
 webpush.setVapidDetails('mailto:truthordarefans@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -52,11 +52,21 @@ function emailTemplate({ title, preheader = '', bodyHtml, ctaUrl = null, ctaText
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'tod_secret_change_me';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) { console.error('FATAL: JWT_SECRET env var not set'); process.exit(1); }
 const BACKEND = process.env.BACKEND_URL || 'https://truthordare-backend.onrender.com';
 const FRONTEND = process.env.FRONTEND_URL || 'https://www.truthordareformyfans.com';
 
-app.use(cors({ origin: '*' }));
+app.use(cors({
+    origin: [
+        'https://www.truthordareformyfans.com',
+        'https://truthordareformyfans.com',
+        'https://truthordare-backend.onrender.com'
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-secret'],
+    credentials: true
+}));
 
 // CRITICAL: Stripe webhook requires raw body for signature verification.
 // Must be registered BEFORE express.json() middleware.
