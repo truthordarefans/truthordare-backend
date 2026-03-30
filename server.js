@@ -9,10 +9,14 @@ const crypto = require('crypto');
 const { Resend } = require('resend');
 const webpush = require('web-push');
 
-// VAPID keys for web push notifications
-const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || 'BDaI55PcBNta6coNS1Rlvac0iu44b6KELPL75g4e2lymrrfGhWpNsTnIPDgT1ILWejua0uCmU1dwQXw4rU9Xt6I';
+// VAPID keys for web push notifications (optional — push notifications disabled if not set)
+const VAPID_PUBLIC  = process.env.VAPID_PUBLIC_KEY  || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || '';
-webpush.setVapidDetails('mailto:truthordarefans@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+    webpush.setVapidDetails('mailto:truthordarefans@gmail.com', VAPID_PUBLIC, VAPID_PRIVATE);
+} else {
+    console.warn('VAPID keys not set — push notifications disabled');
+}
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendEmail(to, subject, html) {
