@@ -273,7 +273,7 @@ app.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) return res.status(401).json({ error: 'Invalid credentials.' });
         const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET);
-        res.json({ message: 'Logged in.', token, role: user.role, handle: user.handle });
+        res.json({ message: 'Logged in.', token, role: user.role, handle: user.handle, name: user.name });
     } catch (err) { res.status(500).json({ error: 'Login failed.' }); }
 });
 
@@ -1905,6 +1905,22 @@ app.post('/admin/fix-role', async (req, res) => {
         const user = result.value || result;
         if (!user) return res.status(404).json({ error: 'User not found' });
         res.json({ success: true, name: user.name, email: user.email, role: user.role });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /admin/update-user — update any user field by email
+app.post('/admin/update-user', async (req, res) => {
+    const { secret, email, updates } = req.body;
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: 'Forbidden' });
+    if (!email || !updates) return res.status(400).json({ error: 'email and updates required' });
+    try {
+        const result = await User.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { $set: updates },
+            { new: true }
+        );
+        if (!result) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, name: result.name, email: result.email, role: result.role });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
