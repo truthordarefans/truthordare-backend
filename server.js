@@ -19,7 +19,7 @@ async function sendEmail(to, subject, html) {
     if (!process.env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set — skipping email'); return; }
     try {
         const { error } = await resend.emails.send({
-            from: 'Truth or Dare For My Fans <onboarding@resend.dev>',
+            from: 'Truth or Dare For My Fans <noreply@truthordareformyfans.com>',
             to,
             subject,
             html,
